@@ -356,7 +356,8 @@ namespace Nebula{
   }
 
   void Position::doMove(const Move m, StateInfo& newSt, const bool givesCheck){
-    thisThread->nodes.fetch_add(1,std::memory_order_relaxed);
+    if (thisThread)
+      thisThread->nodes.fetch_add(1,std::memory_order_relaxed);
     uint64_t k=st->key^Zobrist::side;
     std::memcpy(&newSt,st, offsetof(StateInfo,key));
     newSt.previous=st;
