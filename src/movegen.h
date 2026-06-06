@@ -43,21 +43,16 @@ namespace Nebula{
   namespace Movegen{
     template <GenType Type, Direction D>
     ExtMove* makePromotions(ExtMove* moveList, const Square to){
-      if (Type==CAPTURES||Type==EVASIONS||Type==NON_EVASIONS)
-        *moveList++=make<PROMOTION>(to-D,to,QUEEN);
-      if (Type==QUIETS||Type==EVASIONS||Type==NON_EVASIONS){
-        *moveList++=make<PROMOTION>(to-D,to,ROOK);
-        *moveList++=make<PROMOTION>(to-D,to,BISHOP);
-        *moveList++=make<PROMOTION>(to-D,to,KNIGHT);
-      }
+      // Makruk: only Met promotion
+      *moveList++=make<PROMOTION>(to-D,to,MET);
       return moveList;
     }
 
     template <Color Us, GenType Type>
     ExtMove* generatePawnMoves(const Position& pos, ExtMove* moveList, const uint64_t target){
       constexpr Color them=~Us;
-      constexpr uint64_t tRank7Bb=Us==WHITE?rank7Bb:rank2Bb;
-      constexpr uint64_t tRank3Bb=Us==WHITE?rank3Bb:rank6Bb;
+      // Makruk: White promotes reaching rank 6 (pawn on rank 5), Black reaching rank 3 (pawn on rank 4)
+      constexpr uint64_t tPromotionRankBb=Us==WHITE?rank5Bb:rank4Bb;
       constexpr Direction up=pawnPush(Us);
       constexpr Direction upRight=Us==WHITE?NORTH_EAST:SOUTH_WEST;
       constexpr Direction upLeft=Us==WHITE?NORTH_WEST:SOUTH_EAST;
@@ -65,34 +60,28 @@ namespace Nebula{
       const uint64_t enemies=Type==EVASIONS
                              ?pos.checkers()
                              :pos.pieces(them);
-      const uint64_t pawnsOn7=pos.pieces(Us,PAWN)&tRank7Bb;
-      const uint64_t pawnsNotOn7=pos.pieces(Us,PAWN)&~tRank7Bb;
+      const uint64_t pawnsOnPromoRank=pos.pieces(Us,PAWN)&tPromotionRankBb;
+      const uint64_t pawnsNotOnPromoRank=pos.pieces(Us,PAWN)&~tPromotionRankBb;
+      // Single-step quiet pushes (no double-step in Makruk)
       if (Type!=CAPTURES){
-        uint64_t b1=shift<up>(pawnsNotOn7)&emptySquares;
-        uint64_t b2=shift<up>(b1&tRank3Bb)&emptySquares;
-        if (Type==EVASIONS){
+        uint64_t b1=shift<up>(pawnsNotOnPromoRank)&emptySquares;
+        if (Type==EVASIONS)
           b1&=target;
-          b2&=target;
-        }
         if (Type==QUIET_CHECKS){
           const Square ksq=pos.square<KING>(them);
           const uint64_t dcCandidatePawns=pos.blockersForKing(them)&~fileBb(ksq);
           b1&=pawnAttacksBb(them,ksq)|shift<up>(dcCandidatePawns);
-          b2&=pawnAttacksBb(them,ksq)|shift<up+up>(dcCandidatePawns);
         }
         while (b1){
           const Square to=popLsb(b1);
           *moveList++=makeMove(to-up,to);
         }
-        while (b2){
-          const Square to=popLsb(b2);
-          *moveList++=makeMove(to-up-up,to);
-        }
       }
-      if (pawnsOn7){
-        uint64_t b1=shift<upRight>(pawnsOn7)&enemies;
-        uint64_t b2=shift<upLeft>(pawnsOn7)&enemies;
-        uint64_t b3=shift<up>(pawnsOn7)&emptySquares;
+      // Promotion moves (capture or push onto promotion rank)
+      if (pawnsOnPromoRank){
+        uint64_t b1=shift<upRight>(pawnsOnPromoRank)&enemies;
+        uint64_t b2=shift<upLeft>(pawnsOnPromoRank)&enemies;
+        uint64_t b3=shift<up>(pawnsOnPromoRank)&emptySquares;
         if (Type==EVASIONS)
           b3&=target;
         while (b1)
@@ -102,9 +91,10 @@ namespace Nebula{
         while (b3)
           moveList=makePromotions<Type, up>(moveList,popLsb(b3));
       }
+      // Non-promotion captures (no en passant in Makruk)
       if (Type==CAPTURES||Type==EVASIONS||Type==NON_EVASIONS){
-        uint64_t b1=shift<upRight>(pawnsNotOn7)&enemies;
-        uint64_t b2=shift<upLeft>(pawnsNotOn7)&enemies;
+        uint64_t b1=shift<upRight>(pawnsNotOnPromoRank)&enemies;
+        uint64_t b2=shift<upLeft>(pawnsNotOnPromoRank)&enemies;
         while (b1){
           const Square to=popLsb(b1);
           *moveList++=makeMove(to-upRight,to);
@@ -112,13 +102,6 @@ namespace Nebula{
         while (b2){
           const Square to=popLsb(b2);
           *moveList++=makeMove(to-upLeft,to);
-        }
-        if (pos.epSquare()!=SQ_NONE){
-          if (Type==EVASIONS&&target&pos.epSquare()+up)
-            return moveList;
-          b1=pawnsNotOn7&pawnAttacksBb(them,pos.epSquare());
-          while (b1)
-            *moveList++=make<EN_PASSANT>(popLsb(b1),pos.epSquare());
         }
       }
       return moveList;
@@ -129,7 +112,12 @@ namespace Nebula{
       uint64_t bb=pos.pieces(Us,Pt);
       while (bb){
         Square from=popLsb(bb);
-        uint64_t b=attacksBb<Pt>(from,pos.pieces())&target;
+        // Khon (BISHOP) is color-dependent; all other pieces use the generic table
+        uint64_t b;
+        if constexpr (Pt==BISHOP)
+          b=khonAttacksBb(Us,from)&target;
+        else
+          b=attacksBb<Pt>(from,pos.pieces())&target;
         if (Checks&&(Pt==QUEEN||!(pos.blockersForKing(~Us)&from)))
           b&=pos.checkSquares(Pt);
         while (b)
@@ -163,10 +151,7 @@ namespace Nebula{
           b&=~attacksBb<QUEEN>(pos.square<KING>(~Us));
         while (b)
           *moveList++=makeMove(ksq,popLsb(b));
-        if ((Type==QUIETS||Type==NON_EVASIONS)&&pos.canCastle(Us&ANY_CASTLING))
-          for (const CastlingRights cr : {Us&KING_SIDE,Us&QUEEN_SIDE})
-            if (!pos.castlingImpeded(cr)&&pos.canCastle(cr))
-              *moveList++=make<CASTLING>(ksq,pos.castleRookSquare(cr));
+        // No castling in Makruk
       }
       return moveList;
     }

@@ -142,9 +142,11 @@ namespace Nebula{
     const Square ksq=square<KING>(~sideToMove);
     si->checkSquares[PAWN]=pawnAttacksBb(~sideToMove,ksq);
     si->checkSquares[KNIGHT]=attacksBb<KNIGHT>(ksq);
-    si->checkSquares[BISHOP]=attacksBb<BISHOP>(ksq,pieces());
+    // Khon check squares: reverse-color lookup (squares from which our Khon checks enemy king)
+    si->checkSquares[BISHOP]=khonAttacksBb(~sideToMove,ksq);
     si->checkSquares[ROOK]=attacksBb<ROOK>(ksq,pieces());
-    si->checkSquares[QUEEN]=si->checkSquares[BISHOP]|si->checkSquares[ROOK];
+    // Met check squares: 4-diagonal steps from enemy king
+    si->checkSquares[QUEEN]=pseudoAttacks[QUEEN][ksq];
     si->checkSquares[KING]=0;
   }
 
@@ -216,8 +218,8 @@ namespace Nebula{
   uint64_t Position::sliderBlockers(const uint64_t sliders, const Square s, uint64_t& pinners) const{
     uint64_t blockers=0;
     pinners=0;
-    uint64_t snipers=((attacksBb<ROOK>(s)&pieces(QUEEN,ROOK))
-      |(attacksBb<BISHOP>(s)&pieces(QUEEN,BISHOP)))&sliders;
+    // Only Rook is a slider in Makruk; Khon and Met are step pieces
+    uint64_t snipers=(attacksBb<ROOK>(s)&pieces(ROOK))&sliders;
     const uint64_t occupancy=pieces()^snipers;
     while (snipers){
       const Square sniperSq=popLsb(snipers);
@@ -234,8 +236,12 @@ namespace Nebula{
     return (pawnAttacksBb(BLACK,s)&pieces(WHITE,PAWN))
       |(pawnAttacksBb(WHITE,s)&pieces(BLACK,PAWN))
       |(attacksBb<KNIGHT>(s)&pieces(KNIGHT))
-      |(attacksBb<ROOK>(s,occupied)&pieces(ROOK,QUEEN))
-      |(attacksBb<BISHOP>(s,occupied)&pieces(BISHOP,QUEEN))
+      |(attacksBb<ROOK>(s,occupied)&pieces(ROOK))
+      // Met: color-independent 4-diagonal step
+      |(pseudoAttacks[QUEEN][s]&pieces(QUEEN))
+      // Khon: color-dependent — reverse-color lookup finds which Khons attack s
+      |(khonAttacksBb(BLACK,s)&pieces(WHITE,BISHOP))
+      |(khonAttacksBb(WHITE,s)&pieces(BLACK,BISHOP))
       |(attacksBb<KING>(s)&pieces(KING));
   }
 
