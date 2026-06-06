@@ -7,6 +7,7 @@
 #include "misc.h"
 #include "thread.h"
 #include "incbin/incbin.h"
+#include "makruk/makruk_eval.h"
 #if !defined(_MSC_VER) && !defined(NNUE_EMBEDDING_OFF)
 INCBIN(EmbeddedNNUE,NnueNetDefaultName);
 #else
@@ -47,18 +48,9 @@ namespace Nebula{
   }
 
   Value Eval::evaluate(const Position& pos, int* complexity){
-    const Color stm=pos.stm();
-    int nnueComplexity;
-    const int scale=1064+106*pos.nonPawnMaterial()/5120;
-    Value optimism=pos.thisthread()->optimism[stm];
-    const Value nnue=Nnue::evaluate(pos,true,&nnueComplexity);
-    nnueComplexity=(104*nnueComplexity+131*abs(nnue))/256;
     if (complexity)
-      *complexity=nnueComplexity;
-    optimism=optimism*(269+nnueComplexity)/256;
-    Value v=(nnue*scale+optimism*(scale-754))/1024;
-    v=v*(195-pos.rule50Count())/211;
-    v=std::clamp(v,VALUE_TB_LOSS_IN_MAX_PLY+1,VALUE_TB_WIN_IN_MAX_PLY-1);
-    return v;
+      *complexity=0;
+    const Value v=makrukClassicalEval(pos);
+    return std::clamp(v,VALUE_TB_LOSS_IN_MAX_PLY+1,VALUE_TB_WIN_IN_MAX_PLY-1);
   }
 }

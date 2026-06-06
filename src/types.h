@@ -180,11 +180,11 @@ namespace Nebula {
     VALUE_MATED_IN_MAX_PLY=-VALUE_MATE_IN_MAX_PLY,
 
     // Piece values (midgame / endgame)
-    PawnValueMg=126, PawnValueEg=208,
+    PawnValueMg=126,  PawnValueEg=208,
     KnightValueMg=781, KnightValueEg=854,
-    BishopValueMg=825, BishopValueEg=915,
+    BishopValueMg=660, BishopValueEg=640,  // Khon (BISHOP slot)
     RookValueMg=1276, RookValueEg=1380,
-    QueenValueMg=2538, QueenValueEg=2682,
+    QueenValueMg=420,  QueenValueEg=450,   // Met (QUEEN slot)
 
     MidgameLimit=15258,
     EndgameLimit=3915

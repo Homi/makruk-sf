@@ -9,6 +9,7 @@
 #include "thread.h"
 #include "uci.h"
 #include "makruk/makruk_counting.h"
+#include "makruk/makruk_eval.h"
 using namespace std;
 
 namespace Nebula{
@@ -129,6 +130,9 @@ namespace Nebula{
       else if (token=="makrukcount"){
         MakrukCountingState cs;
         cout<<makrukCountingReport(pos,cs,MakrukCountingMode::Fairy)<<flush;
+      }
+      else if (token=="makrukeval"){
+        cout<<makrukEvalReport(pos)<<flush;
       }
       else if (token=="perft"){
         int d=1;

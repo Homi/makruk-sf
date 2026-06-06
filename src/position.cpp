@@ -296,7 +296,9 @@ namespace Nebula{
         &&!(from+pawnPush(us)==to&&empty(to)))
         return false;
     }
-    else if (!(attacksBb(typeOf(pc),from,pieces())&to))
+    else if (typeOf(pc)==BISHOP
+               ?!(khonAttacksBb(us,from)&to)
+               :!(attacksBb(typeOf(pc),from,pieces())&to))
       return false;
     if (checkers()){
       if (typeOf(pc)!=KING){
