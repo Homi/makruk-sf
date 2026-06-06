@@ -286,14 +286,14 @@ namespace Nebula{
     if (pieces(us)&to)
       return false;
     if (typeOf(pc)==PAWN){
-      if ((rank8Bb|rank1Bb)&to)
+      // Makruk: pawn cannot land on the promotion rank via a NORMAL move type.
+      // White promotes on rank 6, Black on rank 3; those must use PROMOTION move type.
+      const uint64_t promoRankBb=(us==WHITE)?rank6Bb:rank3Bb;
+      if ((rank8Bb|rank1Bb|promoRankBb)&to)
         return false;
+      // Makruk: no double-step pawn move
       if (!(pawnAttacksBb(us,from)&pieces(~us)&to)
-        &&!(from+pawnPush(us)==to&&empty(to))
-        &&!(from+2*pawnPush(us)==to
-          &&relativeRank(us,from)==RANK_2
-          &&empty(to)
-          &&empty(to-pawnPush(us))))
+        &&!(from+pawnPush(us)==to&&empty(to)))
         return false;
     }
     else if (!(attacksBb(typeOf(pc),from,pieces())&to))
@@ -419,12 +419,8 @@ namespace Nebula{
       movePiece(from,to);
     }
     if (typeOf(pc)==PAWN){
-      if ((static_cast<int>(to)^static_cast<int>(from))==16
-        &&pawnAttacksBb(us,to-pawnPush(us))&pieces(them,PAWN)){
-        st->epSquare=to-pawnPush(us);
-        k^=Zobrist::enpassant[fileOf(st->epSquare)];
-      }
-      else if (typeOf(m)==PROMOTION){
+      // Makruk has no double-step pawn move, so no en-passant square is ever set here.
+      if (typeOf(m)==PROMOTION){
         const Piece promotion=makePiece(us,promotionType(m));
         removePiece(to);
         putPiece(promotion,to);
