@@ -1,166 +1,166 @@
-<div align="left">
+# Makruk-SF
 
-  [![Release][release-badge]][release-link]
-  [![Commits][commits-badge]][commits-link]
+Makruk-SF is a Thai Chess (Makruk) engine project derived from **sf-kernel**, a reduced and cleaned Stockfish-derived engine core.
 
-  ![Downloads][downloads-badge]
-  [![License][license-badge]][license-link]
- 
-</div>
+The goal of this project is to build a practical Makruk engine with:
 
-# ♟️ sf-kernel
-A warning-free, surgically reduced, standards-clean Stockfish kernel...a minimal Stockfish-derived chess engine core.
+- Correct Makruk move generation
+- Correct Makruk promotion rules
+- Complete Makruk counting rules
+- Makruk-specific evaluation
+- Makruk NNUE support
+- Self-play data generation
+- Training pipeline for a strong Makruk NNUE network
+- Benchmarking against Fairy-Stockfish and Fairy-Max Makruk engines
 
-This is a stripped-down, modernized, and aggressively cleaned extraction of the Stockfish engine core, designed to serve as a minimal, embeddable, analyzable chess engine kernel.
+## Status
 
-## 🧭 Overview
-sf-kernel preserves Stockfish’s proven search, evaluation, and move generation logic, while removing large amounts of legacy scaffolding, compatibility baggage, and platform-specific cruft.
-The result is a compact, modern C++ chess engine core that is:
+This project is currently in early development.
 
-- Dramatically smaller than upstream Stockfish
-- Fully warning-clean at maximum compiler warning levels
-- Standards-focused and tool-friendly
-- Ideal for research, experimentation, embedding, and educational use
+Current focus:
 
-The project is not a “fork” in the traditional sense — it is a structural distillation of Stockfish into a minimal, self-contained kernel.
+1. Rename and prepare the project structure.
+2. Convert chess rules into Makruk rules.
+3. Implement Makruk counting rules.
+4. Add Makruk-specific evaluation.
+5. Add Makruk NNUE feature transformer.
+6. Build self-play and training infrastructure.
 
-## 🎯 Focus
-- Deterministic, warning-free builds
-- Strict standards correctness (MSVC / Clang / GCC / MinGW)
-- Minimal code surface and binary size
-- Clean move generation, search, and evaluation core
-- Maximum suitability for embedding, study, and research
-- C++ standard conformance & static analysis cleanliness
-- Maximum warning hygiene
+## Project Author / Maintainer
 
-## 🧠 Core Philosophy
-sf-kernel treats Stockfish as a kernel, not an application.
-Everything unnecessary for pure chess intelligence has been cut away.
+Makruk-SF modifications and Makruk-specific development:
 
-## 📦 What Was Removed
-All non-essential layers:
+- Homi
+- Email: bhome1@hotmail.com
 
-- Debugging 
-- Legacy hacks
-- Compatibility shims
-- Platform clutter
-- Feature bloat
-- Syzygy TB code
-- Classical Evaluation
-- Training infrastructure (Not runtime logic)
-- Legacy platform glue (Modern C++ only)
-- Debug infrastructure (Clean release kernel)
+## Based On
 
-## 🧱 What Remains
-- Move generation
-- Search & pruning logic
-- Evaluation & NNUE interface
-- Hash tables
-- Threading
-- Position, legality, SEE, repetition, etc.
-- UCI interface
-- Time Management
+This project is derived from:
 
-It is Stockfish — just without the noise.
+- sf-kernel  
+  https://github.com/FireFather/sf-kernel
 
-```
-perft 7
-a2a3: 106743106
-b2b3: 133233975
-c2c3: 144074944
-d2d3: 227598692
-e2e3: 306138410
-f2f3: 102021008
-g2g3: 135987651
-h2h3: 106678423
-a2a4: 137077337
-b2b4: 134087476
-c2c4: 157756443
-d2d4: 269605599
-e2e4: 309478263
-f2f4: 119614841
-g2g4: 130293018
-h2h4: 138495290
-b1a3: 120142144
-b1c3: 148527161
-g1f3: 147678554
-g1h3: 120669525
+sf-kernel itself is a reduced and cleaned engine core derived from:
 
-Nodes: 3195901860
-Time:  8.86661 sec
-Speed: 360442269 N/s
-```
+- Stockfish  
+  https://github.com/official-stockfish/Stockfish
 
-## 🔬 What Makes sf-kernel Different
-- Source code footprint size: ~680 KB has been reduced to ~218 KB
-- Compiler warnings reduced from 3029 to 118 (via strict MSVC/Resharper/Clang analysis, see docs/stockfish_16_warnings.xml and docs/sf-kernel_1.0_warnings.xml for details)
-- Build surface: from Large to Minimal
-- Dependencies: from Many to Tiny
-- Embeddable: from Hard to Easy
-- Readability: from Low to High
+## License
 
-sf-kernel preserves Stockfish’s world-class playing strength while making the engine auditable, portable, and clean.
+Makruk-SF is distributed under the **GNU General Public License version 3 (GPLv3)**.
 
-## 🚀 Goal
-- sf-kernel is designed to be:
-- Minimal: only the core chess engine remains
-- Clean: warning-free at strict compiler levels
-- Modern: idiomatic, tool-friendly C++
-- Transparent: readable, auditable, hackable
-- Fast: retains Stockfish’s proven performance characteristics
+This project is derived from sf-kernel / Stockfish, which are GPLv3-licensed projects.  
+Therefore, Makruk-SF remains licensed under GPLv3.
 
-## ✨ Why Does sf-kernel Exists?
-- Stockfish is extremely powerful — but also extremely large, complex, and legacy-heavy.
-- A chess engine does not need to be huge to be strong
-- Clean code and high performance are compatible
-- Modern static analysis can be embraced instead of ignored
-- sf-kernel exists to answer a simple question:
-- What does Stockfish look like when you keep only the engine — and remove everything else?
-- The result is a tiny, fast, research-friendly kernel that is easy to understand, modify, embed, and experiment with.
+See the `LICENSE` file for the full GPLv3 license text.
 
-## 🚦 Status
-✅ Compiles cleanly at strict warning levels
+## Attribution
 
-✅ Functional engine core
+This project contains code and design inherited from sf-kernel and Stockfish.
 
-✅ Major size reduction vs Stockfish
+Original upstream projects:
 
-✅ Warning-clean under strict analysis modes
+- Stockfish contributors
+- sf-kernel contributors
 
-🚧 Ongoing: cleanup and subsystem documentation
+Makruk-SF-specific modifications are maintained by:
 
-## ⚙️To Build
-- Visual Studio -> use the included project files: sf-kernel.sln or sf-kernel.vcxproj
-- MSYS2 mingw64 -> use the included shell scripts: make_avx2.sh, make_bmi2.sh or make_all.sh
+- Homi <bhome1@hotmail.com>
 
-## 🧩 Based On
-This project is based on:
-Stockfish https://github.com/official-stockfish/Stockfish
+## Modification Notice
 
-## 📜 License
-- sf-kernel (like Stockfish) is released under the GNU General Public License v3.
-- See LICENSE for details.
+Makruk-SF is not the original sf-kernel project and is not the original Stockfish project.
 
-## 📦 Current Scope
-Included:
-- Move generation
-- Search
-- Evaluation (NNUE supported)
-- Position & bitboards
-- Transposition table
-- Threading kernel
-- Time management core
+This project modifies the original chess engine core to support Thai Chess (Makruk), including but not limited to:
 
-Excluded:
-- UCI shell
-- Debug/UI tooling
-- Legacy portability shims
-- Platform-specific wrappers
+- Makruk piece movement
+- Makruk starting position
+- Makruk pawn promotion
+- Removal of chess-only rules such as castling, en passant, and pawn double-step
+- Makruk counting rules
+- Makruk-specific evaluation
+- Makruk NNUE feature design
+- Makruk self-play and training tools
 
-[license-badge]:https://img.shields.io/github/license/FireFather/sf-kernel?style=for-the-badge&label=license&color=success
-[license-link]:https://github.com/FireFather/sf-kernel/blob/main/LICENSE
-[release-badge]:https://img.shields.io/github/v/release/FireFather/sf-kernel?style=for-the-badge&label=official%20release
-[release-link]:https://github.com/FireFather/sf-kernel/releases/latest
-[commits-badge]:https://img.shields.io/github/commits-since/FireFather/sf-kernel/latest?style=for-the-badge
-[commits-link]:https://github.com/FireFather/sf-kernel/commits/main
-[downloads-badge]:https://img.shields.io/github/downloads/FireFather/sf-kernel/total?color=success&style=for-the-badge
+## Planned Makruk Rules
+
+Makruk-SF intends to implement Makruk rules based primarily on Fairy-Stockfish's Makruk variant behavior, with additional Makruk-specific features where useful.
+
+Planned rules include:
+
+- No castling
+- No en passant
+- No two-square pawn move
+- Pawn promotion to Met only
+- White pawns start on rank 3 and promote on rank 6
+- Black pawns start on rank 6 and promote on rank 3
+- Stalemate is draw
+- Makruk counting rules
+- Makruk-specific FEN and notation compatibility
+
+## Development Roadmap
+
+### Phase 1: Project Preparation
+
+- Rename project from sf-kernel to Makruk-SF
+- Update README, NOTICE, and documentation
+- Keep GPLv3 license and upstream attribution
+- Confirm clean build on Windows and Linux
+
+### Phase 2: Makruk Rules
+
+- Implement Makruk start position
+- Replace chess Bishop semantics with Khon
+- Replace chess Queen semantics with Met
+- Implement Makruk pawn movement and promotion
+- Remove castling, en passant, and pawn double-step
+- Add Makruk perft tests
+
+### Phase 3: Counting Rules
+
+- Implement Makruk counting state
+- Add counting eligibility checks
+- Add draw adjudication
+- Add debug output for counting status
+
+### Phase 4: Makruk Evaluation
+
+- Add Makruk material values
+- Add piece-square tables for Makruk
+- Add pawn promotion race evaluation
+- Add Khon, Met, and rook-specific heuristics
+- Add endgame and counting-aware evaluation
+
+### Phase 5: Makruk NNUE
+
+- Add Makruk NNUE feature transformer
+- Add Makruk-specific feature mapping
+- Add NNUE loading and validation
+- Add Makruk network training pipeline
+
+### Phase 6: Self-Play and Training
+
+- Add self-play generator
+- Add position extraction tools
+- Add teacher labeling tools
+- Add dataset converter
+- Add training scripts
+- Add benchmark scripts
+
+## Build
+
+Build instructions will be updated as the project is converted from sf-kernel to Makruk-SF.
+
+Initial expected build targets:
+
+- Visual Studio / MSVC on Windows
+- MSYS2 MinGW on Windows
+- GCC / Clang on Linux
+
+## Disclaimer
+
+Makruk-SF is an independent derived project.
+
+It is not affiliated with, endorsed by, or maintained by the original Stockfish or sf-kernel authors.
+
+This software is provided under the terms of the GNU GPLv3 and comes with no warranty.
