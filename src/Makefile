@@ -58,11 +58,12 @@ endif
 ### Source and object files
 SRCS = bitboard.cpp evaluate.cpp main.cpp misc.cpp movepick.cpp position.cpp \
 	search.cpp thread.cpp timeman.cpp tt.cpp uci.cpp ucioption.cpp \
-	nnue/evaluate_nnue.cpp nnue/features/half_ka_v2_hm.cpp
+	nnue/evaluate_nnue.cpp nnue/features/half_ka_v2_hm.cpp \
+	makruk/makruk_counting.cpp
 
 OBJS = $(notdir $(SRCS:.cpp=.o))
 
-VPATH = syzygy:nnue:nnue/features
+VPATH = syzygy:nnue:nnue/features:makruk
 
 ### ==========================================================================
 ### Section 2. High-level Configuration
@@ -829,7 +830,7 @@ net:
 
 # clean binaries and objects
 objclean:
-	@rm -f sf-kernel sf-kernel.exe *.o ./syzygy/*.o ./nnue/*.o ./nnue/features/*.o
+	@rm -f sf-kernel sf-kernel.exe *.o ./syzygy/*.o ./nnue/*.o ./nnue/features/*.o ./makruk/*.o
 
 # clean auxiliary profiling files
 profileclean:

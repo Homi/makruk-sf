@@ -8,6 +8,7 @@
 #include "search.h"
 #include "thread.h"
 #include "uci.h"
+#include "makruk/makruk_counting.h"
 using namespace std;
 
 namespace Nebula{
@@ -125,6 +126,10 @@ namespace Nebula{
       else if (token=="ucinewgame") Search::clear();
       else if (token=="isready") async()<<"readyok"<<std::endl;
       else if (token=="bench") bench(pos,states);
+      else if (token=="makrukcount"){
+        MakrukCountingState cs;
+        cout<<makrukCountingReport(pos,cs,MakrukCountingMode::Fairy)<<flush;
+      }
       else if (token=="perft"){
         int d=1;
         is>>d;
