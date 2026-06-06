@@ -10,6 +10,7 @@ namespace Nebula {
     void runMakrukMovegenTests();
     void runMakrukLegalityTests();
     void runMakrukCountingTests();
+    void runMakrukEvalTests();
 }
 
 int main() {
@@ -18,5 +19,6 @@ int main() {
     Nebula::runMakrukMovegenTests();
     Nebula::runMakrukLegalityTests();
     Nebula::runMakrukCountingTests();
+    Nebula::runMakrukEvalTests();
     return 0;
 }
