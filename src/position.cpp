@@ -27,7 +27,7 @@ namespace Nebula{
     int h2(const uint64_t h){ return static_cast<int>(h>>16&0x1fff); }
     uint64_t cuckoo[8192];
     Move cuckooMove[8192];
-    const string pieceToChar(" PNBRQK  pnbrqk");
+    const string pieceToChar(" PNSRMK  pnsrmk"); // S=Khon, M=Met
     constexpr Piece pcs[]={
       W_PAWN,W_KNIGHT,W_BISHOP,W_ROOK,W_QUEEN,W_KING,
       B_PAWN,B_KNIGHT,B_BISHOP,B_ROOK,B_QUEEN,B_KING

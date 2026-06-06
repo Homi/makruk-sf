@@ -233,6 +233,16 @@ namespace Nebula {
     PIECE_NB=16
   };
 
+  // Makruk piece type aliases (semantic mapping onto chess internals)
+  constexpr PieceType KHON = BISHOP; // Khon: one step forward or diagonally
+  constexpr PieceType MET  = QUEEN;  // Met: one step diagonally
+
+  // Makruk colored piece aliases
+  constexpr Piece W_KHON = W_BISHOP;
+  constexpr Piece B_KHON = B_BISHOP;
+  constexpr Piece W_MET  = W_QUEEN;
+  constexpr Piece B_MET  = B_QUEEN;
+
 
   // Piece values indexed by game phase
   constexpr Value pieceValue[PHASE_NB][PIECE_NB]={

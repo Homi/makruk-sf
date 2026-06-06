@@ -14,7 +14,7 @@ namespace Nebula{
   extern vector<string> setupBench();
 
   namespace{
-    auto startFen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    auto startFen="rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1";
 
     void position(Position& pos, istringstream& is, StateListPtr& states){
       Move m;
@@ -159,7 +159,7 @@ namespace Nebula{
       to=makeSquare(to>from?FILE_G:FILE_C,rankOf(from));
     string move=square(from)+square(to);
     if (typeOf(m)==PROMOTION)
-      move+=" pnbrqk"[promotionType(m)];
+      move+=" pnsrmk"[promotionType(m)];
     return move;
   }
 
