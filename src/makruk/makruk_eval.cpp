@@ -189,21 +189,81 @@ static int chebyshev(Square a, Square b) {
                     std::abs((int)rankOf(a) - (int)rankOf(b)));
 }
 
+// Returns true for light squares (file + rank is even).
+static bool isLightSquare(Square s) {
+    return ((int)fileOf(s) + (int)rankOf(s)) % 2 == 0;
+}
+
+// Returns true if all Mets (QUEEN slot) of color c are on the same square color.
+static bool metsAllSameColor(const Position& pos, Color c) {
+    uint64_t bb = pos.pieces(c, QUEEN);
+    if (!bb) return true;
+    const bool firstLight = isLightSquare(lsb(bb));
+    while (bb) {
+        if (isLightSquare(popLsb(bb)) != firstLight) return false;
+    }
+    return true;
+}
+
+// Returns true when the weak king is at a Khon back corner where mate is impossible.
+// White Khon back corners (king has only one checking square): a1, h1.
+// Black Khon back corners: a8, h8.
+static bool isKBKBackCorner(const Position& pos, Color stronger) {
+    const Square wksq = pos.square<KING>(~stronger);
+    return (stronger == WHITE) ? (wksq == SQ_A1 || wksq == SQ_H1)
+                               : (wksq == SQ_A8 || wksq == SQ_H8);
+}
+
+// Returns the nearest Khon front corner (where checkmate is achievable).
+// White Khon front corners: a8, h8.  Black Khon front corners: a1, h1.
+static Square nearestKhonFrontCorner(Square sq, Color khonColor) {
+    const Square c1 = (khonColor == WHITE) ? SQ_A8 : SQ_A1;
+    const Square c2 = (khonColor == WHITE) ? SQ_H8 : SQ_H1;
+    return (chebyshev(sq, c1) <= chebyshev(sq, c2)) ? c1 : c2;
+}
+
 // Returns true when the stronger side cannot force checkmate against a bare king.
-// Single minor piece (Knight, Khon, Met) and 2-Knight or 2-Met configurations
-// cannot force mate; Makruk counting rules also bound the 2-Knight case.
+// Note: single Khon (KBK) is excluded — it CAN mate at front corners.
 static bool isInsufficientMaterial(const Position& pos, Color stronger) {
-    const int r = pos.count<ROOK>(stronger);
-    const int p = pos.count<PAWN>(stronger);
+    const int r  = pos.count<ROOK>(stronger);
+    const int p  = pos.count<PAWN>(stronger);
     if (r > 0 || p > 0) return false;          // rook or pawn can force win
-    const int n = pos.count<KNIGHT>(stronger);
-    const int b = pos.count<BISHOP>(stronger);  // Khon
-    const int q = pos.count<QUEEN>(stronger);   // Met
-    const int total = n + b + q;
-    if (total <= 1)                 return true; // lone minor piece
-    if (n == 2 && b == 0 && q == 0) return true; // KNNvK — counting draw
-    if (q >= 1 && n == 0 && b == 0) return true; // Met(s) only — insufficient
+
+    const int n  = pos.count<KNIGHT>(stronger);
+    const int kh = pos.count<BISHOP>(stronger);  // Khon
+    const int q  = pos.count<QUEEN>(stronger);   // Met
+
+    // Lone knight — cannot force checkmate
+    if (n == 1 && kh == 0 && q == 0) return true;
+    // Single Met — diagonal-only, cannot force checkmate
+    if (n == 0 && kh == 0 && q == 1) return true;
+    // Two knights — counting rule also constrains; draw
+    if (n == 2 && kh == 0 && q == 0) return true;
+    // Multiple Mets all on same square color — cannot cover all corners
+    if (n == 0 && kh == 0 && q >= 2 && metsAllSameColor(pos, stronger)) return true;
+    // Single Khon (KBK) is position-dependent — handled separately.
     return false;
+}
+
+// Returns true when we have exactly K+Khon vs bare K.
+// Caller must already have confirmed isBareKing(~stronger).
+static bool isKBK(const Position& pos, Color stronger) {
+    return pos.count<BISHOP>(stronger) == 1
+        && pos.count<KNIGHT>(stronger) == 0
+        && pos.count<ROOK>(stronger)   == 0
+        && pos.count<QUEEN>(stronger)  == 0
+        && pos.count<PAWN>(stronger)   == 0;
+}
+
+// Mop-up for KBK: guide weak king toward the nearest Khon front corner,
+// and close the strong king to assist.
+static Score kbkMopup(const Position& pos, Color stronger) {
+    const Square wKsq  = pos.square<KING>(~stronger);
+    const Square sKsq  = pos.square<KING>(stronger);
+    const Square target = nearestKhonFrontCorner(wKsq, stronger);
+    const int cornerBonus = (7 - chebyshev(wKsq, target)) * 25;
+    const int closeBonus  = (7 - chebyshev(sKsq, wKsq))  * 10;
+    return S(cornerBonus + closeBonus, cornerBonus + closeBonus);
 }
 
 // Mop-up bonus for winning endgames where the weaker side has only a king.
@@ -275,11 +335,15 @@ Value makrukClassicalEval(const Position& pos) {
     for (Color stronger : {WHITE, BLACK}) {
         if (!isBareKing(pos, ~stronger)) continue;
         if (isInsufficientMaterial(pos, stronger)) {
-            // Scale heavily toward draw — keep only a tiny residual for contempt.
             score = calcScore(mgValue(score) / 8, egValue(score) / 8);
+        } else if (isKBK(pos, stronger)) {
+            if (isKBKBackCorner(pos, stronger)) {
+                // Weak king hides in a back corner the Khon cannot cover — draw.
+                score = calcScore(mgValue(score) / 8, egValue(score) / 8);
+            } else {
+                add(score, kbkMopup(pos, stronger), stronger);
+            }
         } else {
-            // Winning endgame: add mop-up guidance so the engine drives the
-            // enemy king to an edge/corner and closes its own king.
             add(score, mopupBonus(pos, stronger), stronger);
         }
         break;
@@ -311,12 +375,17 @@ std::string makrukEvalReport(const Position& pos) {
         if (!isBareKing(pos, ~stronger)) continue;
         if (isInsufficientMaterial(pos, stronger)) {
             egDesc = "draw (insufficient material)";
+        } else if (isKBK(pos, stronger)) {
+            if (isKBKBackCorner(pos, stronger)) {
+                egDesc = "draw (KBK back corner)";
+            } else {
+                const Score raw = kbkMopup(pos, stronger);
+                mopup = (stronger == WHITE) ? raw : static_cast<Score>(-static_cast<int>(raw));
+                egDesc = (stronger == WHITE) ? "KBK win (white)" : "KBK win (black)";
+            }
         } else {
-            // mopupBonus returns a positive Score; apply correct sign for the report.
             const Score raw = mopupBonus(pos, stronger);
-            mopup = (stronger == WHITE)
-                    ? raw
-                    : static_cast<Score>(-static_cast<int>(raw));
+            mopup = (stronger == WHITE) ? raw : static_cast<Score>(-static_cast<int>(raw));
             egDesc = (stronger == WHITE) ? "win (white)" : "win (black)";
         }
         break;
