@@ -188,10 +188,188 @@ void testCountingReportFields() {
     std::cout << report;
 }
 
+// ---- Fairy-compatible behaviour tests -------------------------------------
+
+void testShouldActivateFalseForStartPos() {
+    const char* fen = "rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1";
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position pos;
+    pos.set(fen, false, &states->back(), nullptr);
+
+    const auto sig = computeMakrukMaterialSignature(pos);
+    Color claimant = WHITE;
+    assert(!shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy) &&
+           "shouldActivate must be false at start position");
+    assert(!shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Off) &&
+           "shouldActivate must be false in Off mode");
+    std::cout << "PASS: shouldActivate=false at start position\n";
+}
+
+void testShouldActivateTrueForBareKing() {
+    // White bare King vs Black Rook+King — Black should be detected as the claimant.
+    // Wait: WHITE is bare, so WHITE is the claimant.
+    const char* fen = "k7/8/8/8/8/8/8/r1K5 w - - 0 1";
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position pos;
+    pos.set(fen, false, &states->back(), nullptr);
+
+    const auto sig = computeMakrukMaterialSignature(pos);
+    Color claimant = BLACK;  // will be overwritten
+    assert(shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy) &&
+           "shouldActivate must be true when White is bare");
+    assert(claimant == WHITE && "White is the bare side — should be set as claimant");
+    std::cout << "PASS: shouldActivate=true, claimant=WHITE for bare-king position\n";
+}
+
+void testActivateCountingInitialState() {
+    // White Rook b1 + King a1 vs Black bare King a8.
+    // After activation for Black claimant, check all fields.
+    const char* fen = "k7/8/8/8/8/8/8/KR6 w - - 0 1";
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position pos;
+    pos.set(fen, false, &states->back(), nullptr);
+
+    MakrukCountingState cs;
+    activateMakrukCounting(cs, pos, BLACK, MakrukCountingMode::Fairy);
+
+    assert(cs.active                              && "counting must be active after activate");
+    assert(cs.claimant == BLACK                   && "claimant must be BLACK");
+    assert(cs.mode == MakrukCountingMode::Fairy   && "mode must be Fairy");
+    assert(cs.count == 0                          && "count must start at 0");
+    assert(cs.limit == CountingLimits::Rook       && "limit must be Rook (32 plies)");
+    assert(cs.matSig.rooks[WHITE] == 1            && "matSig should record White Rook");
+    assert(!isMakrukCountingDraw(cs)              && "not a draw at count=0");
+    std::cout << "PASS: activateMakrukCounting initialises state correctly\n";
+}
+
+void testUpdateIncrementsCount() {
+    // Call update 5 times with the same position; count should reach 5.
+    const char* fen = "k7/8/8/8/8/8/8/KR6 w - - 0 1";
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position pos;
+    pos.set(fen, false, &states->back(), nullptr);
+
+    MakrukCountingState cs;
+    activateMakrukCounting(cs, pos, BLACK, MakrukCountingMode::Fairy);
+
+    for (int i = 1; i <= 5; ++i) {
+        updateMakrukCountingState(cs, pos);
+        assert(cs.count == i && "count must increment by 1 each ply");
+        assert(cs.active     && "counting must remain active");
+    }
+    std::cout << "PASS: updateMakrukCountingState increments count correctly\n";
+}
+
+void testNoDrawBeforeLimit() {
+    const char* fen = "k7/8/8/8/8/8/8/KR6 w - - 0 1";
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position pos;
+    pos.set(fen, false, &states->back(), nullptr);
+
+    MakrukCountingState cs;
+    activateMakrukCounting(cs, pos, BLACK, MakrukCountingMode::Fairy);
+
+    // Drive count to limit-1.
+    for (int i = 0; i < cs.limit - 1; ++i)
+        updateMakrukCountingState(cs, pos);
+    assert(!isMakrukCountingDraw(cs) && "must not be draw one ply before limit");
+    std::cout << "PASS: no draw one ply before limit\n";
+}
+
+void testDrawExactlyAtLimit() {
+    const char* fen = "k7/8/8/8/8/8/8/KR6 w - - 0 1";
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position pos;
+    pos.set(fen, false, &states->back(), nullptr);
+
+    MakrukCountingState cs;
+    activateMakrukCounting(cs, pos, BLACK, MakrukCountingMode::Fairy);
+
+    const int lim = cs.limit;
+    for (int i = 0; i < lim; ++i)
+        updateMakrukCountingState(cs, pos);
+
+    assert(cs.count == lim         && "count must equal limit");
+    assert(isMakrukCountingDraw(cs) && "draw must be detected at limit");
+    std::cout << "PASS: draw detected exactly at limit=" << lim << " plies\n";
+}
+
+void testUpdateDeactivatesWhenNotEligible() {
+    // Activate counting for BLACK (bare) then pass a position where BLACK has
+    // a Rook (no longer bare) — update must deactivate counting.
+    const char* fenBare    = "k7/8/8/8/8/8/8/KR6 w - - 0 1"; // BLACK bare
+    const char* fenNotBare = "kr6/8/8/8/8/8/8/K7 w - - 0 1";  // BLACK has Rook
+
+    StateListPtr statesBare(new std::deque<StateInfo>(1));
+    Position posBare;
+    posBare.set(fenBare, false, &statesBare->back(), nullptr);
+
+    MakrukCountingState cs;
+    activateMakrukCounting(cs, posBare, BLACK, MakrukCountingMode::Fairy);
+    assert(cs.active);
+
+    StateListPtr statesNotBare(new std::deque<StateInfo>(1));
+    Position posNotBare;
+    posNotBare.set(fenNotBare, false, &statesNotBare->back(), nullptr);
+
+    updateMakrukCountingState(cs, posNotBare);
+    assert(!cs.active && "counting must deactivate when claimant is no longer bare");
+    std::cout << "PASS: counting deactivates when claimant gains a piece\n";
+}
+
+void testLimitRecalculatesOnCapture() {
+    // Activate counting with WHITE having 2 Knights (limit = TwoKnight = 64).
+    // Then pass a position where WHITE has only 1 Knight.
+    // Limit must recalculate to OneKnight (128) and count must still increment.
+    const char* fenTwoKnights = "k7/8/8/8/8/8/8/KNN5 w - - 0 1";
+    const char* fenOneKnight  = "k7/8/8/8/8/8/8/KN6 w - - 0 1";
+
+    StateListPtr s1(new std::deque<StateInfo>(1));
+    Position pos1;
+    pos1.set(fenTwoKnights, false, &s1->back(), nullptr);
+
+    MakrukCountingState cs;
+    activateMakrukCounting(cs, pos1, BLACK, MakrukCountingMode::Fairy);
+    assert(cs.limit == CountingLimits::TwoKnight && "initial limit should be TwoKnight");
+
+    StateListPtr s2(new std::deque<StateInfo>(1));
+    Position pos2;
+    pos2.set(fenOneKnight, false, &s2->back(), nullptr);
+
+    updateMakrukCountingState(cs, pos2);
+    assert(cs.limit == CountingLimits::OneKnight &&
+           "limit must recalculate to OneKnight after stronger side loses a Knight");
+    assert(cs.count == 1 && "count must still increment after recalculation");
+    assert(cs.active      && "counting must remain active");
+    std::cout << "PASS: limit recalculates (TwoKnight→OneKnight) when stronger side loses Knight\n";
+}
+
+void testActiveReportShowsCountAndLimit() {
+    // An active counting report must include count and limit values.
+    const char* fen = "k7/8/8/8/8/8/8/KR6 w - - 0 1";
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position pos;
+    pos.set(fen, false, &states->back(), nullptr);
+
+    MakrukCountingState cs;
+    activateMakrukCounting(cs, pos, BLACK, MakrukCountingMode::Fairy);
+    updateMakrukCountingState(cs, pos);
+    updateMakrukCountingState(cs, pos);  // count = 2
+
+    const std::string report = makrukCountingReport(pos, cs, MakrukCountingMode::Fairy);
+    assert(report.find("active       : yes") != std::string::npos && "report: active=yes");
+    assert(report.find("claimant")           != std::string::npos && "report: claimant");
+    assert(report.find("count")              != std::string::npos && "report: count");
+    assert(report.find("limit")              != std::string::npos && "report: limit");
+    assert(report.find("draw reached")       != std::string::npos && "report: draw reached");
+    std::cout << "PASS: active counting report contains all expected fields\n";
+}
+
 }  // namespace
 
 void runMakrukCountingTests() {
     std::cout << "=== Makruk counting tests ===\n";
+    // --- original tests ---
     testStartPosNotEligible();
     testBareKingDetection();
     testRookVsBareKingEligible();
@@ -202,6 +380,16 @@ void runMakrukCountingTests() {
     testOffModeNeverEligible();
     testCountingDrawDetection();
     testCountingReportFields();
+    // --- Fairy-compatible behaviour tests ---
+    testShouldActivateFalseForStartPos();
+    testShouldActivateTrueForBareKing();
+    testActivateCountingInitialState();
+    testUpdateIncrementsCount();
+    testNoDrawBeforeLimit();
+    testDrawExactlyAtLimit();
+    testUpdateDeactivatesWhenNotEligible();
+    testLimitRecalculatesOnCapture();
+    testActiveReportShowsCountAndLimit();
     std::cout << "=== All counting tests passed ===\n";
 }
 

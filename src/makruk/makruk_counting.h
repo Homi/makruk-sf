@@ -113,8 +113,28 @@ bool isMakrukCountingEligible(const MakrukMaterialSignature& sig,
                                Color claimant,
                                MakrukCountingMode mode);
 
-// Advance the counting state by one ply.
-// Call this after every doMove() when cs.active is true.
+// Check whether any side should begin counting in the current position.
+// Sets outClaimant to the eligible side (WHITE checked first).
+// Returns false if no side is eligible or mode is Off.
+bool shouldActivateMakrukCounting(const MakrukMaterialSignature& sig,
+                                   Color& outClaimant,
+                                   MakrukCountingMode mode);
+
+// Initialise and activate a counting state from scratch.
+// Records current material, computes the applicable limit, and sets count=0.
+// Caller is responsible for checking shouldActivateMakrukCounting() first.
+void activateMakrukCounting(MakrukCountingState& cs,
+                              const Position& pos,
+                              Color claimant,
+                              MakrukCountingMode mode);
+
+// Advance the counting state by one ply (call after every doMove()).
+// Behaviour when cs.active is true:
+//   1. Recheck claimant eligibility; deactivate if no longer eligible.
+//   2. If the stronger side's material changed (lost a piece), recalculate the
+//      limit based on the new material — the count is NOT reset.
+//   3. Increment cs.count.
+// No-op when cs.active is false.
 void updateMakrukCountingState(MakrukCountingState& cs, const Position& pos);
 
 // Return true if the counting limit has been reached (draw).

@@ -86,15 +86,67 @@ bool isMakrukCountingEligible(const MakrukMaterialSignature& sig,
 }
 
 // ---------------------------------------------------------------------------
+// Activation helpers
+// ---------------------------------------------------------------------------
+
+bool shouldActivateMakrukCounting(const MakrukMaterialSignature& sig,
+                                   Color& outClaimant,
+                                   const MakrukCountingMode mode) {
+    if (mode == MakrukCountingMode::Off) return false;
+    for (const Color c : {WHITE, BLACK}) {
+        if (isMakrukCountingEligible(sig, c, mode)) {
+            outClaimant = c;
+            return true;
+        }
+    }
+    return false;
+}
+
+void activateMakrukCounting(MakrukCountingState& cs,
+                              const Position& pos,
+                              const Color claimant,
+                              const MakrukCountingMode mode) {
+    cs = MakrukCountingState{};
+    cs.active              = true;
+    cs.claimant            = claimant;
+    cs.mode                = mode;
+    cs.count               = 0;
+    cs.reversiblePlyAtStart = pos.rule50Count();
+    cs.matSig              = computeMakrukMaterialSignature(pos);
+    cs.limit               = getMakrukCountingLimit(cs.matSig, claimant, mode);
+}
+
+// ---------------------------------------------------------------------------
 // State update
 // ---------------------------------------------------------------------------
 
-void updateMakrukCountingState(MakrukCountingState& cs, const Position& /*pos*/) {
+void updateMakrukCountingState(MakrukCountingState& cs, const Position& pos) {
     if (!cs.active) return;
+
+    const MakrukMaterialSignature cur = computeMakrukMaterialSignature(pos);
+
+    // 1. Re-check eligibility: in valid Fairy play the claimant stays bare, but
+    //    check defensively so the subsystem stays correct under all inputs.
+    if (!isMakrukCountingEligible(cur, cs.claimant, cs.mode)) {
+        cs.active = false;
+        return;
+    }
+
+    // 2. If the stronger side's pieces changed (e.g. the bare king captured one),
+    //    recalculate the limit.  The count is NOT reset — we continue from where
+    //    we are but measure against the new (typically larger) limit.
+    const Color stronger = ~cs.claimant;
+    if (cur.rooks[stronger]   != cs.matSig.rooks[stronger]
+     || cur.knights[stronger] != cs.matSig.knights[stronger]
+     || cur.khons[stronger]   != cs.matSig.khons[stronger]
+     || cur.mets[stronger]    != cs.matSig.mets[stronger]) {
+        cs.matSig = cur;
+        cs.limit  = getMakrukCountingLimit(cur, cs.claimant, cs.mode);
+        // TODO: some rule-sets restart the count here; verify against Thai CF rules.
+    }
+
+    // 3. Increment the ply counter.
     ++cs.count;
-    // TODO: if a pawn is pushed or a piece is captured, counting eligibility may
-    // change and the count may need to be reset or counting stopped.
-    // For now the count is always incremented; the caller checks isMakrukCountingDraw().
 }
 
 // ---------------------------------------------------------------------------
