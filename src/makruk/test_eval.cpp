@@ -151,7 +151,7 @@ static void testAdvancedPawnScoresHigher() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 10: makrukEvalReport includes all expected sections.
+// Test 10: makrukEvalReport includes all expected sections (including endgame).
 // ---------------------------------------------------------------------------
 static void testEvalReportContainsSections() {
     const std::string name = "testEvalReportContainsSections";
@@ -159,11 +159,88 @@ static void testEvalReportContainsSections() {
     setPos(pos, st, "rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1");
     const std::string r = makrukEvalReport(pos);
     assert(r.find("phase")         != std::string::npos);
+    assert(r.find("endgame")       != std::string::npos);
     assert(r.find("material+pst")  != std::string::npos);
     assert(r.find("rook activity") != std::string::npos);
     assert(r.find("king safety")   != std::string::npos);
+    assert(r.find("mop-up")        != std::string::npos);
     assert(r.find("blended")       != std::string::npos);
     assert(r.find("from stm")      != std::string::npos);
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: KRK — mop-up adds to score; weak king on edge > weak king at center.
+// ---------------------------------------------------------------------------
+static void testKRKMopupPushesToEdge() {
+    const std::string name = "testKRKMopupPushesToEdge";
+    // White K+R vs Black bare King on edge (a8) vs bare King at center (d5).
+    // White to move — more-cornered position should score higher.
+    Position posEdge; StateListPtr stE;
+    setPos(posEdge, stE, "k7/8/8/8/8/8/8/R3K3 w - - 0 1");   // Black King on a8 (edge)
+
+    Position posCenter; StateListPtr stC;
+    setPos(posCenter, stC, "8/8/8/3k4/8/8/8/R3K3 w - - 0 1"); // Black King on d5 (center)
+
+    const Value vEdge   = makrukClassicalEval(posEdge);
+    const Value vCenter = makrukClassicalEval(posCenter);
+    assert(vEdge > vCenter && "KRK: cornered weak king must score higher for strong side");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: KNK — draw (single knight cannot force checkmate).
+// ---------------------------------------------------------------------------
+static void testKNKIsDraw() {
+    const std::string name = "testKNKIsDraw";
+    // White K+N vs Black bare King; score should be near zero (draw).
+    Position pos; StateListPtr st;
+    setPos(pos, st, "4k3/8/8/8/8/8/8/3NK3 w - - 0 1");
+    const Value v = makrukClassicalEval(pos);
+    // Score should be much smaller than a rook's value (1276 cp)
+    assert(std::abs(v) < 200 && "KNK must evaluate near draw (|v| < 200 cp)");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: KBK (Khon) — draw (single Khon cannot force checkmate).
+// ---------------------------------------------------------------------------
+static void testKBKIsDraw() {
+    const std::string name = "testKBKIsDraw";
+    Position pos; StateListPtr st;
+    setPos(pos, st, "4k3/8/8/8/8/8/8/3SK3 w - - 0 1"); // S = Khon
+    const Value v = makrukClassicalEval(pos);
+    assert(std::abs(v) < 200 && "KBK (Khon) must evaluate near draw (|v| < 200 cp)");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 14: KNNK — draw (2 knights cannot force checkmate + counting).
+// ---------------------------------------------------------------------------
+static void testKNNKIsDraw() {
+    const std::string name = "testKNNKIsDraw";
+    Position pos; StateListPtr st;
+    setPos(pos, st, "4k3/8/8/8/8/8/8/2NNK3 w - - 0 1");
+    const Value v = makrukClassicalEval(pos);
+    assert(std::abs(v) < 200 && "KNNK must evaluate near draw (|v| < 200 cp)");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: KRK kings-closer bonus — own king closer to weak king = higher eval.
+// ---------------------------------------------------------------------------
+static void testKRKKingCloseBonus() {
+    const std::string name = "testKRKKingCloseBonus";
+    // Black bare King on a8 (corner). Compare: White King near (b6) vs far (h1).
+    Position posNear; StateListPtr stN;
+    setPos(posNear, stN, "k7/8/1K6/8/8/8/8/R7 w - - 0 1"); // W King b6, near a8
+
+    Position posFar; StateListPtr stF;
+    setPos(posFar, stF, "k7/8/8/8/8/8/8/R6K w - - 0 1");    // W King h1, far
+
+    const Value vNear = makrukClassicalEval(posNear);
+    const Value vFar  = makrukClassicalEval(posFar);
+    assert(vNear > vFar && "KRK: own king close to weak king must score higher");
     pass(name);
 }
 
@@ -183,6 +260,11 @@ void runMakrukEvalTests() {
     testEvalFlipsForBlack();
     testAdvancedPawnScoresHigher();
     testEvalReportContainsSections();
+    testKRKMopupPushesToEdge();
+    testKNKIsDraw();
+    testKBKIsDraw();
+    testKNNKIsDraw();
+    testKRKKingCloseBonus();
     std::cout << "All eval tests passed.\n";
 }
 

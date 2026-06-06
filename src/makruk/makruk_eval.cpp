@@ -163,6 +163,64 @@ static Score kingSafety(const Position& pos, Color c) {
 }
 
 // ---------------------------------------------------------------------------
+// Endgame recognition and mop-up evaluation
+// ---------------------------------------------------------------------------
+// In Makruk all non-rook pieces move only one step, so without endgame
+// guidance the search cannot reliably find forced mate: it needs explicit
+// "push weak king to edge" and "close own king" bonuses.
+
+static bool isBareKing(const Position& pos, Color c) {
+    return pos.count<PAWN>(c)   == 0
+        && pos.count<KNIGHT>(c) == 0
+        && pos.count<BISHOP>(c) == 0  // Khon
+        && pos.count<ROOK>(c)   == 0
+        && pos.count<QUEEN>(c)  == 0; // Met
+}
+
+// How far a square is from the nearest board edge (0 = edge/corner, 3 = d4/d5/e4/e5).
+static int distFromEdge(Square s) {
+    return std::min({(int)fileOf(s), 7 - (int)fileOf(s),
+                     (int)rankOf(s), 7 - (int)rankOf(s)});
+}
+
+// Chebyshev (king-move) distance between two squares.
+static int chebyshev(Square a, Square b) {
+    return std::max(std::abs((int)fileOf(a) - (int)fileOf(b)),
+                    std::abs((int)rankOf(a) - (int)rankOf(b)));
+}
+
+// Returns true when the stronger side cannot force checkmate against a bare king.
+// Single minor piece (Knight, Khon, Met) and 2-Knight or 2-Met configurations
+// cannot force mate; Makruk counting rules also bound the 2-Knight case.
+static bool isInsufficientMaterial(const Position& pos, Color stronger) {
+    const int r = pos.count<ROOK>(stronger);
+    const int p = pos.count<PAWN>(stronger);
+    if (r > 0 || p > 0) return false;          // rook or pawn can force win
+    const int n = pos.count<KNIGHT>(stronger);
+    const int b = pos.count<BISHOP>(stronger);  // Khon
+    const int q = pos.count<QUEEN>(stronger);   // Met
+    const int total = n + b + q;
+    if (total <= 1)                 return true; // lone minor piece
+    if (n == 2 && b == 0 && q == 0) return true; // KNNvK — counting draw
+    if (q >= 1 && n == 0 && b == 0) return true; // Met(s) only — insufficient
+    return false;
+}
+
+// Mop-up bonus for winning endgames where the weaker side has only a king.
+// Adds positional urgency on top of material advantage:
+//   – push weak king toward the edge/corner  (Makruk mates always happen there)
+//   – close own king to assist the mate
+static Score mopupBonus(const Position& pos, Color stronger) {
+    const Square sKsq = pos.square<KING>(stronger);
+    const Square wKsq = pos.square<KING>(~stronger);
+    // (3 - distFromEdge) in [0..3]; multiply by 30 to give 0–90 cp per axis
+    const int edgeBonus  = (3 - distFromEdge(wKsq)) * 30;
+    // (7 - chebyshev) in [0..6]; each step closer = +12 cp
+    const int closeBonus = (7 - chebyshev(sKsq, wKsq)) * 12;
+    return S(edgeBonus + closeBonus, edgeBonus + closeBonus);
+}
+
+// ---------------------------------------------------------------------------
 // Phase
 // ---------------------------------------------------------------------------
 
@@ -213,6 +271,20 @@ Value makrukClassicalEval(const Position& pos) {
         add(score, kingSafety(pos, c), c);
     }
 
+    // Bare-king endgame handling: at most one side can be bare at a time.
+    for (Color stronger : {WHITE, BLACK}) {
+        if (!isBareKing(pos, ~stronger)) continue;
+        if (isInsufficientMaterial(pos, stronger)) {
+            // Scale heavily toward draw — keep only a tiny residual for contempt.
+            score = calcScore(mgValue(score) / 8, egValue(score) / 8);
+        } else {
+            // Winning endgame: add mop-up guidance so the engine drives the
+            // enemy king to an edge/corner and closes its own king.
+            add(score, mopupBonus(pos, stronger), stronger);
+        }
+        break;
+    }
+
     const int phase = computePhase(pos);
     const Value v = (mgValue(score) * phase + egValue(score) * (MaxPhase - phase)) / MaxPhase;
 
@@ -224,29 +296,54 @@ Value makrukClassicalEval(const Position& pos) {
 // ---------------------------------------------------------------------------
 
 std::string makrukEvalReport(const Position& pos) {
-    // Separate breakdown for each component
     Score matPST = evalMaterialAndPST(pos);
     Score rookBonus = SCORE_ZERO;
     Score kingBonus = SCORE_ZERO;
+    Score mopup     = SCORE_ZERO;
+    const char* egDesc = "none";
+
     for (Color c : {WHITE, BLACK}) {
         add(rookBonus, rookActivity(pos, c), c);
         add(kingBonus, kingSafety(pos, c), c);
     }
 
+    for (Color stronger : {WHITE, BLACK}) {
+        if (!isBareKing(pos, ~stronger)) continue;
+        if (isInsufficientMaterial(pos, stronger)) {
+            egDesc = "draw (insufficient material)";
+        } else {
+            // mopupBonus returns a positive Score; apply correct sign for the report.
+            const Score raw = mopupBonus(pos, stronger);
+            mopup = (stronger == WHITE)
+                    ? raw
+                    : static_cast<Score>(-static_cast<int>(raw));
+            egDesc = (stronger == WHITE) ? "win (white)" : "win (black)";
+        }
+        break;
+    }
+
     const int phase = computePhase(pos);
-    const Score total = static_cast<Score>(
-        static_cast<int>(matPST) + static_cast<int>(rookBonus) + static_cast<int>(kingBonus)
+    Score total = static_cast<Score>(
+        static_cast<int>(matPST)   +
+        static_cast<int>(rookBonus) +
+        static_cast<int>(kingBonus) +
+        static_cast<int>(mopup)
     );
+    if (egDesc == std::string("draw (insufficient material)"))
+        total = calcScore(mgValue(total) / 8, egValue(total) / 8);
+
     const Value blended = (mgValue(total) * phase + egValue(total) * (MaxPhase - phase)) / MaxPhase;
     const Value fromStm = (pos.stm() == WHITE) ? blended : -blended;
 
     std::ostringstream ss;
     ss << "makrukeval\n";
     ss << "  phase          : " << phase << " / " << MaxPhase << "\n";
-    ss << "  material+pst   : mg=" << mgValue(matPST)   << " eg=" << egValue(matPST)   << "\n";
-    ss << "  rook activity  : mg=" << mgValue(rookBonus) << " eg=" << egValue(rookBonus) << "\n";
-    ss << "  king safety    : mg=" << mgValue(kingBonus) << " eg=" << egValue(kingBonus) << "\n";
-    ss << "  total          : mg=" << mgValue(total)     << " eg=" << egValue(total)     << "\n";
+    ss << "  endgame        : " << egDesc << "\n";
+    ss << "  material+pst   : mg=" << mgValue(matPST)    << " eg=" << egValue(matPST)    << "\n";
+    ss << "  rook activity  : mg=" << mgValue(rookBonus)  << " eg=" << egValue(rookBonus)  << "\n";
+    ss << "  king safety    : mg=" << mgValue(kingBonus)  << " eg=" << egValue(kingBonus)  << "\n";
+    ss << "  mop-up         : mg=" << mgValue(mopup)      << " eg=" << egValue(mopup)      << "\n";
+    ss << "  total          : mg=" << mgValue(total)      << " eg=" << egValue(total)      << "\n";
     ss << "  blended        : " << blended << " cp (white)\n";
     ss << "  from stm       : " << fromStm << " cp\n";
     return ss.str();
