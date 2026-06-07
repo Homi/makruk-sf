@@ -432,3 +432,76 @@ When working in this repository:
 8. Do not remove license or attribution text.
 9. Ask only if a blocking ambiguity exists.
 10. Prefer partial safe progress over broad risky changes.
+
+## Current Training Status
+
+Makruk-SF now has initial NNUE runtime, self-play generation, dataset creation, training, validation, and export.
+
+Initial proof-of-concept result:
+
+- Self-play games: 110
+- Positions: 21,250
+- Score range: approximately -1487 to +1375 cp
+- Median score: 0
+- Game results: all draws
+- Training: 30 epochs
+- Best validation loss: approximately 0.6715
+- Export artifact: makruk_net.bin, float32, approximately 22.6 MB
+
+Interpretation:
+
+- The training pipeline works.
+- The model learns some signal from search/eval scores.
+- The dataset is too draw-heavy.
+- Result/WDL signal is currently weak because all games are drawn.
+- The next priority is data diversity, decisive games, teacher labels, and runtime net validation.
+
+## PR11 — Net Validation, Gauntlet, Decisive Self-Play (completed)
+
+PR11 adds the following tools (no C++ source changes):
+
+- `tools/validate_net.py` — Validates `makruk_net.bin`: header magic/version,
+  architecture size consistency, weight NaN/Inf check, optional engine smoke test.
+- `tools/gauntlet.py` — Match runner: engine A vs engine B with configurable
+  movetime/depth per side, random openings, W/D/L summary and Elo estimate.
+- `tools/selfplay/selfplay.py` — Extended with modes: `time_handicap`,
+  `depth_handicap`, `random_opening` (MultiPV-based); richer JSONL metadata
+  (`mode`, `decisive`, `handicap_ratio`, `depth_cap`, `opening_plies`, `seed`).
+- `tools/training/convert.py` — Adds `decisive`, `mode`, `score_source` columns
+  to training TSV; adds `--decisive-only` filter; backward compatible.
+- `tools/training/dataset_summary.py` — Prints game/position statistics:
+  W/D/L, decisive%, termination breakdown, score distribution, duplicate FEN estimate.
+- `docs/dataset_guide.md` — Explains why draw-heavy data is weak, recommended
+  dataset mix (40/20/20/10/10), commands for decisive data generation,
+  training recommendations when data is draw-heavy.
+
+## PR11 follow-up — Makruk Counting Draw Wired into Game Logic (completed)
+
+Analysis of a 100-game gauntlet vs Fairy-Stockfish revealed 66% stalemate rate,
+caused in part by the counting subsystem existing but never being called during play.
+
+Changes merged on top of PR11 branch (commit d92a37e, PR #11):
+
+- `src/position.h` — `MakrukCountingState makrukCounting` added to `StateInfo`
+  before the `key` field so `doMove()`'s existing `memcpy` carries it forward automatically.
+- `src/position.cpp` — `isDraw()` now calls `isMakrukCountingDraw()` instead of
+  the chess 50-move rule (`rule50 > 99`). `set()` activates counting immediately
+  for bare-king FENs. `doMove()` activates or advances the counting state each ply.
+  `undoMove()` restores state for free via `st = st->previous`.
+- `src/makruk/makruk_counting.h` — comment updated to reflect live integration.
+- `src/makruk/test_counting.cpp` — two new integration tests:
+  `testCountingActivatesOnSet` and `testIsDrawConnectedToCountingDraw`.
+
+All 29 counting + eval tests pass.
+
+## Next Development Priority
+
+Before making the network larger or training longer:
+
+1. Generate decisive games using `time_handicap` or `depth_handicap` mode
+2. Verify decisive rate ≥ 30% with `dataset_summary.py`
+3. Mix normal + decisive datasets before training
+4. Run gauntlet before/after training to measure actual strength gain
+5. Only then consider teacher-labeled positions or quantized net export
+
+Avoid assuming that a lower validation loss means stronger play until gauntlet tests confirm it.
