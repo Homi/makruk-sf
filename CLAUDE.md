@@ -456,6 +456,16 @@ Interpretation:
 - Result/WDL signal is currently weak because all games are drawn.
 - The next priority is data diversity, decisive games, teacher labels, and runtime net validation.
 
+Gauntlet result vs Fairy-Stockfish (100 games, 100 ms/move):
+
+- sf-kernel wins: 7 (7%), draws: 91 (91%), losses: 2 (2%)
+- Decisive rate: 9%
+- Dominant termination: stalemate (66 games)
+- Root cause of high stalemate rate: counting draw was not wired into game logic,
+  allowing positions that should have ended by counting to drift into stalemate endgames.
+  Fixed in PR11 follow-up (commit d92a37e): `isDraw()` now enforces counting draw.
+- Elo estimate: +17 relative to Fairy-Stockfish (unreliable at 9% decisive rate)
+
 ## PR11 — Net Validation, Gauntlet, Decisive Self-Play (completed)
 
 PR11 adds the following tools (no C++ source changes):
