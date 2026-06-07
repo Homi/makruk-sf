@@ -1,12 +1,12 @@
 #pragma once
 #include "nnue_common.h"
-#include "features/half_ka_v2_hm.h"
+#include "features/half_ka_v2_makruk.h"
 #include "layers/affine_transform.h"
 #include "layers/clipped_relu.h"
 #include "layers/sqr_clipped_relu.h"
 
 namespace Nebula::Eval::Nnue{
-  using FeatureSet = Features::HalfKAv2Hm;
+  using FeatureSet = Features::HalfKAv2Makruk;
   constexpr IndexType transformedFeatureDimensions=1024;
   constexpr IndexType psqtBuckets=8;
   constexpr IndexType layerStacks=8;

@@ -5,6 +5,7 @@
 // Makruk-SF-specific modifications maintained by Homi <bhome1@hotmail.com>.
 
 #include "makruk_eval.h"
+#include "../evaluate.h"
 #include "../position.h"
 #include <cassert>
 #include <iostream>
@@ -265,6 +266,30 @@ void runMakrukEvalTests() {
     testKBKIsDraw();
     testKNNKIsDraw();
     testKRKKingCloseBonus();
+
+    // ---------------------------------------------------------------------------
+    // NNUE smoke tests — run after all classical tests.
+    // ---------------------------------------------------------------------------
+
+    // Test N1: Nnue::init() must not crash even when no net file exists.
+    {
+        const std::string name = "testNnueInitNoCrash";
+        Eval::Nnue::init();
+        pass(name);
+    }
+
+    // Test N2: Without a loaded net the engine must fall back to classical eval.
+    {
+        const std::string name = "testNnueFallbackToClassical";
+        assert(Eval::currentNnueNetName.empty()
+               && "Expected no net loaded in unit-test environment");
+        Position pos; StateListPtr st;
+        setPos(pos, st, "rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1");
+        const Value v = Eval::evaluate(pos);
+        assert(std::abs(v) < 50 && "Fallback classical eval of start pos must be near 0");
+        pass(name);
+    }
+
     std::cout << "All eval tests passed.\n";
 }
 

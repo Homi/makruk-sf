@@ -50,7 +50,9 @@ namespace Nebula{
   Value Eval::evaluate(const Position& pos, int* complexity){
     if (complexity)
       *complexity=0;
-    const Value v=makrukClassicalEval(pos);
+    const Value v=currentNnueNetName.empty()
+                  ?makrukClassicalEval(pos)
+                  :Nnue::evaluate(pos,false,nullptr);
     return std::clamp(v,VALUE_TB_LOSS_IN_MAX_PLY+1,VALUE_TB_WIN_IN_MAX_PLY-1);
   }
 }
