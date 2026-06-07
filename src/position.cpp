@@ -120,6 +120,17 @@ namespace Nebula{
     chess960=isChess960;
     thisThread=th;
     setState(st);
+
+    // Initialise Makruk counting state from the FEN position.
+    // If a side is already bare-king with no pawns, counting begins immediately.
+    {
+        const MakrukMaterialSignature sig = computeMakrukMaterialSignature(*this);
+        Color claimant;
+        if (shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy))
+            activateMakrukCounting(st->makrukCounting, *this, claimant, MakrukCountingMode::Fairy);
+        // Otherwise makrukCounting stays zeroed (inactive) from the memset above.
+    }
+
     return *this;
   }
 
@@ -456,6 +467,16 @@ namespace Nebula{
         }
       }
     }
+
+    // Maintain Makruk counting state for the new position.
+    if (!st->makrukCounting.active) {
+        const MakrukMaterialSignature sig = computeMakrukMaterialSignature(*this);
+        Color claimant;
+        if (shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy))
+            activateMakrukCounting(st->makrukCounting, *this, claimant, MakrukCountingMode::Fairy);
+    } else {
+        updateMakrukCountingState(st->makrukCounting, *this);
+    }
   }
 
   void Position::undoMove(const Move m){
@@ -611,7 +632,8 @@ namespace Nebula{
   }
 
   bool Position::isDraw(const int ply) const{
-    if (st->rule50>99&&(!checkers()||MoveList<LEGAL>(*this).size()))
+    // Makruk uses counting rules instead of the 50-move rule.
+    if (isMakrukCountingDraw(st->makrukCounting))
       return true;
     return st->repetition&&st->repetition<ply;
   }

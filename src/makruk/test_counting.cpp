@@ -365,6 +365,56 @@ void testActiveReportShowsCountAndLimit() {
     std::cout << "PASS: active counting report contains all expected fields\n";
 }
 
+// ---------------------------------------------------------------------------
+// Integration tests: counting wired into Position::isDraw()
+// ---------------------------------------------------------------------------
+
+void testCountingActivatesOnSet() {
+    // A bare-king position loaded via set() must automatically activate counting.
+    // White king at c1 (bare), Black king at a8 + Rook at h1.
+    const char* fen = "k7/8/8/8/8/8/8/2K4R w - - 0 1";
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position pos;
+    pos.set(fen, false, &states->back(), nullptr);
+
+    const MakrukCountingState& cs = pos.state()->makrukCounting;
+    assert(cs.active           && "counting must activate in set() for bare-king position");
+    assert(cs.claimant == WHITE && "White is the bare king — it is the claimant");
+    assert(cs.count == 0       && "count starts at 0 on activation");
+    assert(cs.limit == CountingLimits::Rook && "limit = Rook (32 plies) for Black having 1 rook");
+    std::cout << "PASS: counting activates inside Position::set() for bare-king FEN\n";
+}
+
+void testIsDrawConnectedToCountingDraw() {
+    // Verify Position::isDraw() delegates to isMakrukCountingDraw() by driving
+    // the counting state directly through pos.state() (avoids needing 32 doMove calls).
+    const char* fen = "k7/8/8/8/8/8/8/2K4R w - - 0 1";
+    StateListPtr states(new std::deque<StateInfo>(1));
+    Position pos;
+    pos.set(fen, false, &states->back(), nullptr);
+
+    MakrukCountingState& cs = pos.state()->makrukCounting;
+    assert(cs.active && "pre-condition: counting must be active");
+
+    // At count = 0: not a draw.
+    cs.count = 0;
+    assert(!pos.isDraw(1) && "isDraw must be false at count=0");
+
+    // At count = limit - 1: still not a draw.
+    cs.count = cs.limit - 1;
+    assert(!pos.isDraw(1) && "isDraw must be false one ply before limit");
+
+    // At count = limit: draw.
+    cs.count = cs.limit;
+    assert(pos.isDraw(1) && "isDraw must return true at count=limit via isMakrukCountingDraw()");
+
+    // Beyond limit: also a draw.
+    cs.count = cs.limit + 5;
+    assert(pos.isDraw(1) && "isDraw must return true beyond limit");
+
+    std::cout << "PASS: Position::isDraw() is connected to isMakrukCountingDraw()\n";
+}
+
 }  // namespace
 
 void runMakrukCountingTests() {
@@ -390,6 +440,9 @@ void runMakrukCountingTests() {
     testUpdateDeactivatesWhenNotEligible();
     testLimitRecalculatesOnCapture();
     testActiveReportShowsCountAndLimit();
+    // --- integration tests: counting wired into Position::isDraw() ---
+    testCountingActivatesOnSet();
+    testIsDrawConnectedToCountingDraw();
     std::cout << "=== All counting tests passed ===\n";
 }
 
