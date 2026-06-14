@@ -17,17 +17,27 @@ Modes:
                     rate by diversifying the opening.  Combine with
                     time_handicap for maximum decisiveness.
 
+Score adjudication:
+  Makruk counting rules prevent many decisive endgames even when one side has
+  a large material advantage.  Score adjudication declares a winner based on
+  evaluation rather than waiting for checkmate:
+    --adjudication-threshold 500  (cp from White's perspective)
+    --adjudication-streak 5       (consecutive half-moves above threshold)
+  When White's evaluation stays ≥ +threshold for streak half-moves (after ply
+  20), the game is adjudicated as a White win, and vice versa.  Set threshold
+  to 0 to disable adjudication.
+
 Usage examples:
     # Normal self-play (baseline, mostly draws)
     python selfplay.py --games 100 --movetime 100
 
-    # Generate decisive games — strong vs weak movetime
+    # Generate decisive games — strong vs weak movetime + adjudication
     python selfplay.py --games 100 --mode time_handicap --movetime 300 \\
-        --handicap-ratio 0.15
+        --handicap-ratio 0.15 --adjudication-threshold 500
 
     # Depth handicap — fast decisive games
     python selfplay.py --games 50 --mode depth_handicap --movetime 200 \\
-        --depth-cap 3
+        --depth-cap 3 --adjudication-threshold 500 --adjudication-streak 5
 
     # Randomized openings to break draw loops, then normal play
     python selfplay.py --games 100 --mode random_opening --movetime 150 \\
@@ -45,11 +55,13 @@ JSONL record fields (all games):
     ply_count, movetime_ms, mode, decisive
 
 Additional fields when applicable:
-    handicap_ratio  — time_handicap mode
-    depth_cap       — depth_handicap mode
-    opening_plies   — random_opening (and any mode with --opening-plies > 0)
-    opening_top_n   — same
-    seed            — when --seed is set
+    handicap_ratio          — time_handicap mode
+    depth_cap               — depth_handicap mode
+    opening_plies           — random_opening (and any mode with --opening-plies > 0)
+    opening_top_n           — same
+    seed                    — when --seed is set
+    adjudication_threshold  — when adjudication is enabled (threshold > 0)
+    adjudication_streak     — when adjudication is enabled
 
 Makruk-SF is a GPLv3 project derived from sf-kernel / Stockfish.
 Makruk-SF-specific modifications maintained by Homi <bhome1@hotmail.com>.
@@ -236,6 +248,8 @@ def play_game(
     opening_plies: int,
     opening_top_n: int,
     rng: random.Random,
+    adjudication_threshold: int = 0,
+    adjudication_streak: int = 5,
 ) -> dict:
     """Play one game; return a complete game record."""
     engine.new_game()
@@ -245,6 +259,8 @@ def play_game(
     result      = "*"
     termination = "unterminated"
     zero_streak = 0
+    white_adv_streak = 0
+    black_adv_streak = 0
 
     for ply in range(MAX_PLY):
         is_white = (ply % 2 == 0)
@@ -281,10 +297,37 @@ def play_game(
         scores.append(score_cp)
         moves.append(mv)
 
-        if score_cp == 0:
+        # Score from White's perspective (score_cp is from side-to-move's view)
+        white_score = (score_cp or 0) if is_white else -(score_cp or 0)
+        # Mate scores count as very large wins regardless of mate distance
+        if is_mate:
+            white_score = 30000 if is_white else -30000
+
+        if score_cp == 0 and not is_mate:
             zero_streak += 1
         else:
             zero_streak = 0
+
+        # Score adjudication (only after ply 20 to skip opening volatility)
+        if adjudication_threshold > 0 and ply >= 20:
+            if white_score >= adjudication_threshold:
+                white_adv_streak += 1
+                black_adv_streak = 0
+            elif white_score <= -adjudication_threshold:
+                black_adv_streak += 1
+                white_adv_streak = 0
+            else:
+                white_adv_streak = 0
+                black_adv_streak = 0
+
+            if white_adv_streak >= adjudication_streak:
+                result = "1-0"
+                termination = "adjudication"
+                break
+            if black_adv_streak >= adjudication_streak:
+                result = "0-1"
+                termination = "adjudication"
+                break
 
         if _is_threefold(moves):
             result = "1/2-1/2"
@@ -319,6 +362,9 @@ def play_game(
     if opening_plies > 0:
         record["opening_plies"] = opening_plies
         record["opening_top_n"] = opening_top_n
+    if adjudication_threshold > 0:
+        record["adjudication_threshold"] = adjudication_threshold
+        record["adjudication_streak"]    = adjudication_streak
 
     return record
 
@@ -422,6 +468,11 @@ def main() -> None:
                         help="Number of top moves to pick from during random opening")
     parser.add_argument("--seed",     type=int, default=None,
                         help="Random seed for opening randomisation (reproducibility)")
+    parser.add_argument("--adjudication-threshold", type=int, default=0,
+                        help="Adjudicate as decisive when |score| ≥ this value (cp, White's view) "
+                             "for --adjudication-streak consecutive half-moves. 0 = disabled.")
+    parser.add_argument("--adjudication-streak", type=int, default=5,
+                        help="Number of consecutive half-moves above threshold to trigger adjudication")
     parser.add_argument("--pgn",      default="selfplay.pgn",
                         help="PGN output filename")
     parser.add_argument("--jsonl",    default="selfplay.jsonl",
@@ -467,6 +518,8 @@ def main() -> None:
         print(f"Opening  : {args.opening_plies} random plies, top-{args.opening_top_n}")
     if args.seed is not None:
         print(f"Seed     : {args.seed}")
+    if args.adjudication_threshold > 0:
+        print(f"Adjudicate: ±{args.adjudication_threshold} cp × {args.adjudication_streak} half-moves")
     print(f"PGN      : {pgn_path}")
     print(f"JSONL    : {jsonl_path}")
     if args.resume and already_done:
@@ -491,6 +544,8 @@ def main() -> None:
                         depth_cap=args.depth_cap,
                         opening_plies=args.opening_plies,
                         opening_top_n=args.opening_top_n,
+                        adjudication_threshold=args.adjudication_threshold,
+                        adjudication_streak=args.adjudication_streak,
                         rng=rng,
                     )
                 except Exception as exc:

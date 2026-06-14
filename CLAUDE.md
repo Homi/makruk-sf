@@ -504,14 +504,83 @@ Changes merged on top of PR11 branch (commit d92a37e, PR #11):
 
 All 29 counting + eval tests pass.
 
+## Decisive Data Generation — Score Adjudication (PR11 branch, 2026-06-14)
+
+Root cause analysis: even with `depth_handicap depth=1`, self-play produced 0% decisive rate.
+Reason: when counting draw activates (bare-king endgame), the engine scores positions near 0
+regardless of material advantage, and the game drifts to stalemate instead of checkmate.
+
+Fix: **score adjudication** added to `tools/selfplay/selfplay.py`:
+- `--adjudication-threshold 500` (cp, White's perspective)
+- `--adjudication-streak 5` (half-moves above threshold)
+- When White's evaluation stays ≥ +threshold for streak consecutive half-moves (after ply 20),
+  the game is adjudicated as White win. Vice versa for Black.
+- `termination = "adjudication"` in the JSONL record.
+
+Results (20 games, `depth_handicap depth=1`, movetime 200ms, adjudication 500cp/5):
+- Decisive rate: **65%** (13/20), all White wins (stronger side)
+- Vs 0% without adjudication
+
+Recommended decisive dataset command:
+```bash
+cd tools/selfplay
+python selfplay.py \
+    --games 200 \
+    --mode depth_handicap --depth-cap 1 \
+    --movetime 300 \
+    --opening-plies 8 --opening-top-n 4 \
+    --adjudication-threshold 500 --adjudication-streak 5 \
+    --seed 2024 \
+    --pgn decisive_v2.pgn --jsonl decisive_v2.jsonl \
+    --outdir out/decisive_v2
+```
+
+Note: `time_handicap --handicap-ratio 0.05` only gave 14% decisive rate because
+the engine at 15ms still finds drawing moves. `depth_handicap depth=1` is far better.
+
+## Mixed Dataset Training — Round 1 (2026-06-14)
+
+decisive_v2 dataset completed:
+- 200 games, depth_handicap depth=1, movetime 300ms, adjudication 500cp/5, seed 2024
+- **79.5% decisive** (159/200), all by adjudication; 41 draws
+- ~25,842 positions
+
+Mixed dataset (310 games total):
+- 110 normal self-play games (all draws) + 200 decisive_v2 games
+- 43,030 positions after convert.py (min-ply 16, max-ply 400, max-score 2500)
+
+Training:
+- 40 epochs, `--lam 0.7`, Adam lr=0.001
+- Best validation loss: **0.601359** at epoch 35 (vs 0.6715 baseline)
+- Checkpoint: `tools/training/makruk_mixed.pt`
+- Exported net: `src/1877415756.bin` (22.07 MB float32)
+
+Gauntlet result vs Fairy-Stockfish (100 games, 100 ms/move, 6 random opening plies):
+- sf-kernel wins: 4 (4%), draws: 92 (92%), losses: 4 (4%)
+- Decisive rate: 8%
+- Termination breakdown: stalemate=67, draw_score=14, max_ply=8, checkmate=8, repetition=3
+- Elo estimate: **≈0** relative to Fairy-Stockfish
+
+Interpretation:
+- Validation loss improved (0.671 → 0.601) but Elo did not improve vs previous net (+17 → ≈0).
+- Stalemate still dominates (67/100 games). The net doesn't help if games end in stalemate
+  before NNUE evaluation has any influence.
+- The bottleneck is game termination, not net quality.
+- Lower validation loss is not a reliable proxy for gauntlet strength at this data volume.
+
+Root cause of persistent stalemate:
+- Counting draw activates (bare-king endgame) and isDraw() correctly returns draw.
+- But Fairy-Stockfish does not call `result` — it just keeps playing until the gauntlet
+  detects no legal moves (stalemate), because there is no shared protocol for counting draws.
+- Both engines play out the counting window until the weaker side is stalemated.
+
 ## Next Development Priority
 
-Before making the network larger or training longer:
-
-1. Generate decisive games using `time_handicap` or `depth_handicap` mode
-2. Verify decisive rate ≥ 30% with `dataset_summary.py`
-3. Mix normal + decisive datasets before training
-4. Run gauntlet before/after training to measure actual strength gain
-5. Only then consider teacher-labeled positions or quantized net export
+1. Investigate why stalemate rate remains 67% even with counting draw wired in:
+   - Likely cause: the gauntlet does not call `result` when isDraw() triggers —
+     it only detects stalemate (no legal moves). Fix: check isDraw() in gauntlet loop.
+2. Fix gauntlet to call `position fen ... moves ...` and check for counting draw after each move.
+3. Re-run gauntlet after stalemate fix to get a meaningful Elo estimate.
+4. Only consider larger net or more training data after stalemate is resolved.
 
 Avoid assuming that a lower validation loss means stronger play until gauntlet tests confirm it.

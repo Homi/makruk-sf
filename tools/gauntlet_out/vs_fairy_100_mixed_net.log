@@ -1,0 +1,124 @@
+Engine A  : src/sf-kernel  (A(sf-kernel))
+Engine B  : /home/bj69/Myprojects/fairy-stockfish/src/bin/stockfish  (B(stockfish))
+Games     : 100
+Movetime A: 100 ms
+Movetime B: 100 ms
+Opening   : 6 random plies, top-4
+
+ Game  White          Black           Result   Ply  Termination
+--------------------------------------------------------------
+    1  A(sf-kernel)   B(stockfish)   1/2-1/2   104  stalemate
+    2  B(stockfish)   A(sf-kernel)   1/2-1/2   183  stalemate
+    3  A(sf-kernel)   B(stockfish)   1/2-1/2   156  stalemate
+    4  B(stockfish)   A(sf-kernel)   1/2-1/2   133  stalemate
+    5  A(sf-kernel)   B(stockfish)   1/2-1/2   305  draw_score
+    6  B(stockfish)   A(sf-kernel)   1/2-1/2   155  stalemate
+    7  A(sf-kernel)   B(stockfish)   1/2-1/2   285  draw_score
+    8  B(stockfish)   A(sf-kernel)   1/2-1/2   480  max_ply
+    9  A(sf-kernel)   B(stockfish)       1-0   367  checkmate*
+   10  B(stockfish)   A(sf-kernel)   1/2-1/2   189  stalemate
+   11  A(sf-kernel)   B(stockfish)   1/2-1/2   154  stalemate
+   12  B(stockfish)   A(sf-kernel)   1/2-1/2   480  max_ply
+   13  A(sf-kernel)   B(stockfish)   1/2-1/2   170  stalemate
+   14  B(stockfish)   A(sf-kernel)   1/2-1/2   153  stalemate
+   15  A(sf-kernel)   B(stockfish)       1-0   167  checkmate*
+   16  B(stockfish)   A(sf-kernel)   1/2-1/2   131  stalemate
+   17  A(sf-kernel)   B(stockfish)   1/2-1/2   126  stalemate
+   18  B(stockfish)   A(sf-kernel)   1/2-1/2   256  draw_score
+   19  A(sf-kernel)   B(stockfish)   1/2-1/2   194  stalemate
+   20  B(stockfish)   A(sf-kernel)   1/2-1/2   137  stalemate
+   21  A(sf-kernel)   B(stockfish)   1/2-1/2   118  stalemate
+   22  B(stockfish)   A(sf-kernel)   1/2-1/2   199  stalemate
+   23  A(sf-kernel)   B(stockfish)   1/2-1/2   204  stalemate
+   24  B(stockfish)   A(sf-kernel)   1/2-1/2   123  stalemate
+   25  A(sf-kernel)   B(stockfish)   1/2-1/2   232  stalemate
+   26  B(stockfish)   A(sf-kernel)   1/2-1/2   151  stalemate
+   27  A(sf-kernel)   B(stockfish)   1/2-1/2   281  draw_score
+   28  B(stockfish)   A(sf-kernel)   1/2-1/2    97  stalemate
+   29  A(sf-kernel)   B(stockfish)   1/2-1/2   110  stalemate
+   30  B(stockfish)   A(sf-kernel)   1/2-1/2   263  draw_score
+   31  A(sf-kernel)   B(stockfish)   1/2-1/2   217  repetition
+   32  B(stockfish)   A(sf-kernel)       0-1   320  checkmate*
+   33  A(sf-kernel)   B(stockfish)   1/2-1/2   207  draw_score
+   34  B(stockfish)   A(sf-kernel)   1/2-1/2   269  stalemate
+   35  A(sf-kernel)   B(stockfish)   1/2-1/2   174  stalemate
+   36  B(stockfish)   A(sf-kernel)   1/2-1/2   480  max_ply
+   37  A(sf-kernel)   B(stockfish)   1/2-1/2   148  stalemate
+   38  B(stockfish)   A(sf-kernel)   1/2-1/2   340  draw_score
+   39  A(sf-kernel)   B(stockfish)   1/2-1/2   186  stalemate
+   40  B(stockfish)   A(sf-kernel)   1/2-1/2   329  stalemate
+   41  A(sf-kernel)   B(stockfish)   1/2-1/2   480  max_ply
+   42  B(stockfish)   A(sf-kernel)   1/2-1/2   119  stalemate
+   43  A(sf-kernel)   B(stockfish)   1/2-1/2   134  stalemate
+   44  B(stockfish)   A(sf-kernel)   1/2-1/2   195  stalemate
+   45  A(sf-kernel)   B(stockfish)   1/2-1/2   178  stalemate
+   46  B(stockfish)   A(sf-kernel)   1/2-1/2   185  stalemate
+   47  A(sf-kernel)   B(stockfish)   1/2-1/2   150  stalemate
+   48  B(stockfish)   A(sf-kernel)   1/2-1/2   111  stalemate
+   49  A(sf-kernel)   B(stockfish)   1/2-1/2   298  stalemate
+   50  B(stockfish)   A(sf-kernel)   1/2-1/2   480  max_ply
+   51  A(sf-kernel)   B(stockfish)   1/2-1/2   124  stalemate
+   52  B(stockfish)   A(sf-kernel)   1/2-1/2   217  stalemate
+   53  A(sf-kernel)   B(stockfish)   1/2-1/2   130  stalemate
+   54  B(stockfish)   A(sf-kernel)       0-1   230  checkmate*
+   55  A(sf-kernel)   B(stockfish)   1/2-1/2   100  stalemate
+   56  B(stockfish)   A(sf-kernel)   1/2-1/2   480  max_ply
+   57  A(sf-kernel)   B(stockfish)   1/2-1/2   156  stalemate
+   58  B(stockfish)   A(sf-kernel)   1/2-1/2   153  stalemate
+   59  A(sf-kernel)   B(stockfish)       1-0   287  checkmate*
+   60  B(stockfish)   A(sf-kernel)   1/2-1/2   105  stalemate
+   61  A(sf-kernel)   B(stockfish)   1/2-1/2   124  stalemate
+   62  B(stockfish)   A(sf-kernel)   1/2-1/2   107  stalemate
+   63  A(sf-kernel)   B(stockfish)   1/2-1/2   357  draw_score
+   64  B(stockfish)   A(sf-kernel)   1/2-1/2   271  stalemate
+   65  A(sf-kernel)   B(stockfish)   1/2-1/2   130  stalemate
+   66  B(stockfish)   A(sf-kernel)   1/2-1/2   154  repetition
+   67  A(sf-kernel)   B(stockfish)   1/2-1/2   305  draw_score
+   68  B(stockfish)   A(sf-kernel)   1/2-1/2    75  stalemate
+   69  A(sf-kernel)   B(stockfish)   1/2-1/2   160  stalemate
+   70  B(stockfish)   A(sf-kernel)   1/2-1/2   480  max_ply
+   71  A(sf-kernel)   B(stockfish)       1-0   203  checkmate*
+   72  B(stockfish)   A(sf-kernel)   1/2-1/2   145  stalemate
+   73  A(sf-kernel)   B(stockfish)   1/2-1/2   120  stalemate
+   74  B(stockfish)   A(sf-kernel)   1/2-1/2   310  draw_score
+   75  A(sf-kernel)   B(stockfish)   1/2-1/2   124  stalemate
+   76  B(stockfish)   A(sf-kernel)       0-1   252  checkmate*
+   77  A(sf-kernel)   B(stockfish)   1/2-1/2   210  stalemate
+   78  B(stockfish)   A(sf-kernel)   1/2-1/2   177  stalemate
+   79  A(sf-kernel)   B(stockfish)   1/2-1/2   100  stalemate
+   80  B(stockfish)   A(sf-kernel)   1/2-1/2   181  stalemate
+   81  A(sf-kernel)   B(stockfish)   1/2-1/2   132  repetition
+   82  B(stockfish)   A(sf-kernel)   1/2-1/2   334  draw_score
+   83  A(sf-kernel)   B(stockfish)   1/2-1/2   216  stalemate
+   84  B(stockfish)   A(sf-kernel)   1/2-1/2   393  stalemate
+   85  A(sf-kernel)   B(stockfish)   1/2-1/2   126  stalemate
+   86  B(stockfish)   A(sf-kernel)   1/2-1/2   320  draw_score
+   87  A(sf-kernel)   B(stockfish)   1/2-1/2   266  stalemate
+   88  B(stockfish)   A(sf-kernel)   1/2-1/2    95  stalemate
+   89  A(sf-kernel)   B(stockfish)   1/2-1/2   480  max_ply
+   90  B(stockfish)   A(sf-kernel)   1/2-1/2   229  stalemate
+   91  A(sf-kernel)   B(stockfish)   1/2-1/2   126  stalemate
+   92  B(stockfish)   A(sf-kernel)   1/2-1/2   203  stalemate
+   93  A(sf-kernel)   B(stockfish)   1/2-1/2   220  stalemate
+   94  B(stockfish)   A(sf-kernel)       0-1   202  checkmate*
+   95  A(sf-kernel)   B(stockfish)   1/2-1/2   147  draw_score
+   96  B(stockfish)   A(sf-kernel)   1/2-1/2   201  stalemate
+   97  A(sf-kernel)   B(stockfish)   1/2-1/2   170  stalemate
+   98  B(stockfish)   A(sf-kernel)   1/2-1/2   298  draw_score
+   99  A(sf-kernel)   B(stockfish)   1/2-1/2   212  stalemate
+  100  B(stockfish)   A(sf-kernel)   1/2-1/2   265  stalemate
+
+==============================================================
+ Gauntlet summary
+==============================================================
+  Games     : 100
+  A(sf-kernel) wins  : 4  (4.0%)
+  Draws     : 92  (92.0%)
+  B(stockfish) wins  : 4  (4.0%)
+  Decisive  : 8 / 100  (8.0%)
+  Avg |score|: 339 cp
+  Crashes   : 0
+  Elo diff  : -0  (A relative to B, approximate)
+==============================================================
+
+Output    : tools/gauntlet_out/vs_fairy_100_mixed_net.jsonl
