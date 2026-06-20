@@ -7,9 +7,9 @@
 //   - Stalemate, checkmate, and repetition remain separate win/draw conditions.
 //   - Counting draw is only triggered when the count reaches the limit.
 //
-// This file provides data structures and functions for a standalone counting
-// subsystem. It is NOT wired into search or game-end detection in this PR.
-// Wire-up is deferred to a future PR once the subsystem is verified correct.
+// This file provides data structures and functions for the counting subsystem.
+// MakrukCountingState is stored in StateInfo and maintained by Position::doMove().
+// Position::isDraw() calls isMakrukCountingDraw() to enforce the counting draw rule.
 //
 // Makruk-SF is a GPLv3 project derived from sf-kernel / Stockfish.
 // Makruk-SF-specific modifications maintained by Homi <bhome1@hotmail.com>.
