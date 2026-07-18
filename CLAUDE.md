@@ -1659,3 +1659,53 @@ Also fixed in this pass: `makruk/build_tests.sh`'s `ENGINE_SRCS` list was missin
 `nnue/mknn_evaluator.cpp`, left stale by the MknnEvaluator integration — linking failed
 silently (no CI to catch it) until exercised directly. The 29-test suite could not be
 verified as passing between that integration and this fix; it passes now.
+
+## Round 10 Follow-up — SIGSEGV Reproduction Attempt: Negative Result + Defensive Hardening (2026-07-18)
+
+Applied the debug mantra (reproduce → trace fail path → falsify hypothesis → cross-reference
+breadcrumbs) to the unfixed depth≥9 SIGSEGV from earlier in Round 10. **Could not reproduce
+the crash** despite ~1350 engine invocations across four angles, all clean (zero segfaults,
+zero core files):
+
+* 504 direct `position + go depth N` runs: 28 imbalanced FENs (`imbalanced_fens.txt` +
+  `imbalanced_fens_v5.txt`) × depths 9–24 × `UseCounting` on/off.
+* A 60-game self-play run reproducing the *original* discovery method exactly (`--no-counting`,
+  movetime 300, `depth_handicap depth-cap=1`, no `--strong-depth`) — 100% decisive, no crash.
+* 173 multi-threaded runs (Threads 4/8) at depths 16–24 across the same FEN pool, to test a
+  race-condition hypothesis.
+* `go infinite` reaching depth 28 in a single 3s search.
+
+**New breadcrumb that reframes the original heisenbug description:** three independent
+`make clean && make build` rebuilds from identical source+flags produced **byte-identical**
+binaries (matching md5). The Round 10 note "a given binary crashes 3/3 deterministically; a
+rebuild may not" was read as LTO codegen nondeterminism — but that doesn't hold on this
+toolchain, since rebuilds aren't actually different binaries here. Whatever varies between
+"a build that crashes" and "a build that doesn't" isn't recompilation on this machine; cause
+still unknown (compiler/toolchain version drift over time is a candidate, not verified).
+
+**Static-analysis lead, unconfirmed against the real bug:** `ValueList::pushBack` (`misc.h`)
+had zero bounds checking — used by `HalfKAv2Makruk::appendActiveIndices`/`appendChangedIndices`
+for NNUE feature indices. Can't overflow under a *correct* board (Makruk caps at 16 pieces vs.
+`MaxActiveDimensions=32`), but if the position were already corrupted upstream, this would
+silently extend that corruption rather than fail loudly — consistent with, but not proven to
+be, the crash's origin.
+
+**Decision (user-selected):** harden defensively without claiming the root cause is fixed.
+Two always-on checks added (deliberately not plain `assert()`, which the release build's
+`-DNDEBUG` already strips):
+
+* `misc.h` — `ValueList::pushBack` now aborts with a diagnostic on overflow instead of
+  silently writing past `values_[MaxSize-1]`.
+* `position.cpp` — `setCheckInfo` (the confirmed crash *site*: `ksq=SQ_NONE` from an empty
+  king bitboard fed `attacksBb<ROOK>`, reading `RookMagics[64]` out of bounds) now aborts with
+  side/ply/FEN logged when the king is found missing, instead of segfaulting on garbage memory.
+
+Verified: hardened build passes the full 504-run stress test with zero false-positive aborts
+during legitimate deep search, all 29 counting/eval tests pass, and perft depth 5 from the
+Makruk start position (6,223,994 nodes) matches expectations. Committed `0e3ea6d`.
+
+**Status:** root cause still unknown. The `--strong-depth` workaround in `selfplay.py` remains
+the only confirmed-effective mitigation (zero crashes across the `decisive_v6` 300-game run).
+Real gameplay/gauntlet at depth≥9 is still theoretically exposed but has never been observed
+to crash outside forced data-generation conditions — the new hardening means *if* it is ever
+hit again, it will now abort with a diagnosable FEN instead of a raw segfault.
