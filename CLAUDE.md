@@ -1709,3 +1709,116 @@ the only confirmed-effective mitigation (zero crashes across the `decisive_v6` 3
 Real gameplay/gauntlet at depth≥9 is still theoretically exposed but has never been observed
 to crash outside forced data-generation conditions — the new hardening means *if* it is ever
 hit again, it will now abort with a diagnosable FEN instead of a raw segfault.
+
+## Round 11 — Blend-Range Data Round: Closer-Handicap Gauntlets (2026-07-18)
+
+### Motivation
+
+Round 10's `decisive_v6` (extreme-imbalance data, 99% |score|>500cp) was a confirmed
+regression (Elo +70 vs v7's +173), reverted this same session. Rounds 8/9 had already
+established that NNUE blend quality only moves Elo through near-equal (|classical|<300cp)
+position discrimination — extreme-imbalance data doesn't help there and, when oversampled,
+actively dilutes that signal. Round 11 targets the blend range directly instead.
+
+### Data generation: closer-handicap gauntlets
+
+Rather than generating new self-play, ran two 40-game gauntlet configs (sf-kernel v7 vs
+Fairy-SF-NNUE) with a *closer* handicap than the standard baseline (200ms vs depth=3) to
+keep games competitive longer, producing more near-equal positions per game instead of
+early decisive divergence:
+
+* Config A: 40 games, movetime-a=200, depth-b=4, seed=5001 → 19W 21D 0L, 47.5% decisive
+* Config B: 40 games, movetime-a=150, depth-b=3, seed=5002 → 25W 15D 0L, 62.5% decisive
+
+Both well above the standard baseline's typical ~20% draw rate, confirming closer handicaps
+generate more near-equal positions as intended.
+
+### Teacher-labeling and filtering
+
+* Converted both JSONL outputs (min-ply=4) → 6,089 raw positions
+* Teacher-labeled with Fairy-SF depth=10 → 5,964 scored (82 bare-king dropped, 32 out of
+  range, 11 resume-skips), 2.3 min at ~45 pos/sec
+* Filtered to blend range (`combine_v7.py`, |fairy| 30–400cp): **85% acceptance**
+  (3,578/4,208 non-bare-king positions) — vs Round 8's original 63.5% from standard-handicap
+  gauntlet logs. The closer-handicap strategy is a meaningfully more efficient way to harvest
+  blend-range data than the original Option C method.
+
+### Combined dataset
+
+`train_round11_combined.tsv` = `train_v7_combined.tsv` (213,870) + 3,578 new blend-range
+positions = **217,448 positions** — a clean, modest addition (1.7%) with zero
+extreme-imbalance dilution this round. `dataset_summary.py` confirmed healthy distribution
+(0.4% FEN duplication, no anomalies).
+
+### Training
+
+Identical recipe to v7 to isolate the added-data variable as the only change:
+
+```bash
+python3 -u train.py \
+    --input train_round11_combined.tsv \
+    --output makruk_round11.pt \
+    --epochs 60 --lam 0.7 --score-boost 2.0 --color-augment --batch-size 256
+```
+
+* CPU-only training (no CUDA GPU available on this machine — see "Speedup Infrastructure"
+  below), ~8 min/epoch, ~8 hours total for 60 epochs
+* Best epoch: 60 (still improving at the end, no divergence), val_loss: **0.545117**
+* This is slightly *higher* (worse) than v7's 0.538590 on a comparable-distribution
+  dataset — consistent with this project's repeated finding (Rounds 9/10) that val_loss
+  doesn't predict blend-range discrimination quality; the real test is the gauntlet.
+* Export: `src/1204655067.bin` (22.6 MB, int16 MKN2, FT headroom 13.0×, int32 accumulator
+  headroom 26,281× — no overflow risk)
+
+### Gauntlet result
+
+Standard baseline (seed=99, Fairy-SF-NNUE depth=3, 50 games, adj 500cp/5, movetime-a=200ms):
+
+* **Round 11 net (1204655067.bin): 25W 24D 1L → Elo +182**
+* v7 net (1222535932.bin, previous best): 24W 25D 1L → Elo +173
+* **+9 Elo** — within noise at N=50, but positive and matching the magnitude of Round 8's
+  original Option C gain (+9 Elo then too, v6→v7)
+
+### Decision: deployed
+
+Per this project's established convention of keeping within-noise positive deltas as the new
+baseline (the v6→v7 precedent), Round 11 net is now embedded and tracked
+(`src/1204655067.bin`); v7 (`src/1222535932.bin`) is archived/untracked. Full 29-test suite
+and perft depth 5 verified clean against this build.
+
+### Full Benchmark Progression (seed=99, Fairy-SF-NNUE depth=3, 50 games, adj 500cp/5)
+
+| Config | Result | Elo | Notes |
+| ------ | ------ | --- | ----- |
+| Round 11 net + gate=300 (current) | 25W 24D 1L | **+182** | **best gauntlet result** |
+| v7 net + gate=300 | 24W 25D 1L | +173 | previous best |
+| v6 net + gate=300 | 23W 26D 1L | +164 | |
+| Classical eval (sf-kernel-classical) | 19W 31D 0L | +139 | true baseline |
+| v9 net + gate=300 | 12W 36D 2L | +70 | regression (Round 10, reverted) |
+
+### Speedup Infrastructure (investigated, not applied)
+
+Training took ~8 hours (CPU-only, ~8 min/epoch). Investigated speedup options mid-run
+without interrupting it:
+
+* **GPU**: an NVIDIA GeForce GTX 860M is present in hardware, but no driver is loaded
+  (`nvidia-smi` fails) and the installed PyTorch is the CPU-only build (`torch 2.12.0+cpu`,
+  `torch.cuda.is_available()` → False). Using it would require installing an NVIDIA driver
+  (possibly needing a reboot — real risk to any in-progress training) and reinstalling
+  PyTorch with CUDA support. Not attempted; deferred to a session where no training is
+  running, given the 860M is old enough that the payoff is uncertain anyway.
+* **CPU threading**: the training process only used 4 of 8 available cores
+  (`DataLoader num_workers=0`, default torch intra-op threading). A `--threads` flag /
+  `OMP_NUM_THREADS` could push this to 8, but since `train.py` has no checkpoint-resume,
+  testing this mid-run would mean restarting from epoch 0 — the wall-clock math worked out
+  roughly neutral (a ~2x threading speedup from scratch ≈ letting the current run finish),
+  so not applied this round either.
+* **Decision**: revisit after a training round completes, not mid-run. If a future round's
+  data/training cycle needs to be faster, start with the `--threads` flag (cheap, zero
+  system risk) before considering GPU setup (invasive, uncertain payoff on this hardware).
+
+### Net Archive — Round 11
+
+* `src/1204655067.bin` — Round 11 net int16 MKN2, epoch 60, val_loss=0.545117, **Elo +182 — currently embedded**
+* `src/1222535932.bin` — v7 net int16 MKN2, epoch 60, val_loss=0.538590, Elo +173 (archived)
+* `src/2302036703.bin` — v9 net int16 MKN2, epoch 56, val_loss=0.529720, Elo +70 — regression (archived)
