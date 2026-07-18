@@ -1819,6 +1819,36 @@ without interrupting it:
 
 ### Net Archive — Round 11
 
-* `src/1204655067.bin` — Round 11 net int16 MKN2, epoch 60, val_loss=0.545117, **Elo +182 — currently embedded**
-* `src/1222535932.bin` — v7 net int16 MKN2, epoch 60, val_loss=0.538590, Elo +173 (archived)
+* `src/1204655067.bin` — Round 11 net int16 MKN2, epoch 60, val_loss=0.545117, **Elo +182 (N=50) / +164 (N=100) — currently embedded**
+* `src/1222535932.bin` — v7 net int16 MKN2, epoch 60, val_loss=0.538590, Elo +173 (N=50) / +151 (N=100) (archived)
 * `src/2302036703.bin` — v9 net int16 MKN2, epoch 56, val_loss=0.529720, Elo +70 — regression (archived)
+
+## Round 11 Follow-up — N=100 Confirmatory Gauntlet (2026-07-18)
+
+User asked to confirm the +9 Elo gain (N=50, within noise) before treating Round 11 as
+settled. Ran both nets head-to-head at double the sample size, same standard baseline
+settings (seed=99, Fairy-SF-NNUE depth=3, adj 500cp/5, movetime-a=200ms):
+
+| Net | N=50 (original) | N=100 (confirmatory) |
+| --- | ---------------- | --------------------- |
+| Round 11 net (1204655067.bin) | 25W 24D 1L → +182 | 46W 52D 2L → **+164** |
+| v7 net (1222535932.bin) | 24W 25D 1L → +173 | 44W 53D 3L → **+151** |
+
+Both nets' absolute Elo estimates dropped noticeably at N=100 (a reminder that N=50
+estimates in this project have consistently run a bit hot — see the identical pattern in
+every prior round's benchmark table). The relative comparison is the more trustworthy
+number: Round 11 net's lead over v7 **held and slightly grew** (+9 → +13 Elo) rather than
+shrinking toward zero or reversing, which is a reasonably good sign this is a real (if
+still modest) improvement rather than pure noise — though 100 games per side is still well
+short of the sample size needed for high statistical confidence in engine testing generally.
+
+Note on methodology: because both the N=50 and N=100 runs used the same seed (99), the
+first 50 games of each N=100 run are not independent new samples from the first N=50 run —
+they replay the same seeded opening/position sequence. The valid comparison is therefore
+the two *fresh* N=100 runs against each other (+164 vs +151), not a naive pooled total of
+N=50+N=100.
+
+**Decision**: kept Round 11 net deployed (no change from the earlier decision) — the N=100
+result didn't overturn the direction, it reinforced it. `src/evaluate.h` and the tracked net
+binary are unchanged; this was a verification pass only, not a new training/deploy step.
+All 29 tests and a clean rebuild reverified after swapping nets twice for this comparison.
