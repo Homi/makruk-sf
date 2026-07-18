@@ -1635,6 +1635,27 @@ follow-up, not yet applied; flag for the next session to decide.
 
 ### Net Archive — Round 10
 
-* `src/2302036703.bin` — v9 net int16 MKN2, epoch 56, val_loss=0.529720 (best val_loss, but Elo +70 — regression), **currently embedded**
-* `src/1222535932.bin` — v7 net int16 MKN2, epoch 60, val_loss=0.538590, **Elo +173 — best gauntlet result, candidate to re-embed**
+* `src/2302036703.bin` — v9 net int16 MKN2, epoch 56, val_loss=0.529720 (best val_loss, but Elo +70 — regression), archived (was embedded, reverted 2026-07-18)
+* `src/1222535932.bin` — v7 net int16 MKN2, epoch 60, val_loss=0.538590, **Elo +173 — best gauntlet result, currently embedded**
 * `src/2655109219.bin` — v6 net int16 MKN2, L1=512, epoch 50, val_loss=0.537719 (archived)
+
+## Round 10 Follow-up — Net Revert Applied (2026-07-18)
+
+`src/evaluate.h` (`NnueNetDefaultName`) reverted from v9 (`2302036703.bin`) back to v7
+(`1222535932.bin`), acting on the deferred decision flagged above. Rationale unchanged
+from the regression analysis: v9 measured Elo +70 vs v7's +173 in the standard baseline
+gauntlet, and the hypothesis (decisive_v6's extreme-imbalance data, oversampled via
+`--score-boost`, diluted blend-range training signal) was not disproven by any new
+evidence — this was a straight revert, not a re-investigation.
+
+Verified after the revert: clean rebuild (`make -j4 build ARCH=x86-64-bmi2`) succeeds;
+`makrukeval` on a Rook-advantage FEN still reports classical-consistent scoring
+(mg=1275/eg=1380, blended 1282 cp); all 29 counting + eval tests pass via
+`makruk/build_tests.sh`. `src/2302036703.bin` (v9) stays available untracked/gitignored
+for further investigation; only the now-embedded `src/1222535932.bin` is tracked in git,
+per the "one net checked in" convention.
+
+Also fixed in this pass: `makruk/build_tests.sh`'s `ENGINE_SRCS` list was missing
+`nnue/mknn_evaluator.cpp`, left stale by the MknnEvaluator integration — linking failed
+silently (no CI to catch it) until exercised directly. The 29-test suite could not be
+verified as passing between that integration and this fix; it passes now.
