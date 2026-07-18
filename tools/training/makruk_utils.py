@@ -182,6 +182,33 @@ def make_nnue_index(perspective: int, s: int, piece: tuple, ksq: int) -> int:
     )
 
 
+def flip_fen(fen: str) -> str:
+    """Color-flip a Makruk FEN: reverse ranks, swap W↔B pieces, swap side-to-move.
+
+    The result is a valid Makruk position from the opponent's perspective.
+    score_cp and wdl should be negated / inverted by the caller.
+    """
+    parts = fen.split()
+    ranks = parts[0].split('/')
+    ranks.reverse()
+    new_ranks = []
+    for rank in ranks:
+        new_rank = ''
+        for ch in rank:
+            if ch.isupper():
+                new_rank += ch.lower()
+            elif ch.islower():
+                new_rank += ch.upper()
+            else:
+                new_rank += ch
+        new_ranks.append(new_rank)
+    new_board = '/'.join(new_ranks)
+    new_stm = 'b' if parts[1] == 'w' else 'w'
+    hm = parts[4] if len(parts) > 4 else '0'
+    fm = parts[5] if len(parts) > 5 else '1'
+    return f"{new_board} {new_stm} - - {hm} {fm}"
+
+
 def get_active_features(board: MakrukBoard) -> tuple:
     """Return (white_features, black_features) as lists of active NNUE indices.
 

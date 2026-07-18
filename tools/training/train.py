@@ -38,10 +38,12 @@ except ImportError:
     print('ERROR: PyTorch not installed.  Run: pip install torch', file=sys.stderr)
     sys.exit(1)
 
-from makruk_utils import WHITE, MakrukBoard, get_active_features, NNUE_DIMS
+from makruk_utils import WHITE, MakrukBoard, get_active_features, flip_fen, NNUE_DIMS
 
-# Network sizes
-L1, L2, L3 = 256, 32, 32
+# Network sizes — change L1 here to scale the feature transformer.
+# L1=256 (v1–v5): small, no NPS gain from int16 at this size.
+# L1=512 (v6+):   double capacity; int16 accumulation becomes meaningful.
+L1, L2, L3 = 512, 32, 32
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
@@ -52,16 +54,37 @@ def _cp_to_prob(cp: float) -> float:
 
 
 class MakrukDataset(Dataset):
-    def __init__(self, path: str, lam: float = 0.5) -> None:
+    def __init__(self, path: str, lam: float = 0.5, color_augment: bool = False,
+                 score_scale: float = 1.0) -> None:
         self.lam = lam
+        self.score_scale = score_scale
         self.data: list[tuple] = []
         with open(path, newline='') as f:
             for row in csv.DictReader(f, delimiter='\t'):
-                self.data.append((
-                    row['fen'],
-                    int(row['score_cp']),
-                    float(row['wdl']),
-                ))
+                sc  = int(row['score_cp'])
+                wdl = float(row['wdl'])
+                self.data.append((row['fen'], sc, wdl))
+                if color_augment:
+                    # Add the color-flipped position: negate score, invert WDL.
+                    self.data.append((flip_fen(row['fen']), -sc, 1.0 - wdl))
+
+    def sample_weights(self, score_boost: float) -> list[float]:
+        """Return per-sample weights for WeightedRandomSampler.
+
+        |score| < 100cp  → weight 1.0 (near-equal positions)
+        |score| 100-500  → weight 2.0
+        |score| > 500    → weight score_boost (underrepresented high-signal positions)
+        """
+        weights = []
+        for _, sc, _ in self.data:
+            a = abs(sc)
+            if a >= 500:
+                weights.append(score_boost)
+            elif a >= 100:
+                weights.append(2.0)
+            else:
+                weights.append(1.0)
+        return weights
 
     def __len__(self) -> int:
         return len(self.data)
@@ -81,7 +104,7 @@ class MakrukDataset(Dataset):
             score_stm = -score_white
             wdl_stm   = 1.0 - wdl_white
 
-        target = self.lam * _cp_to_prob(score_stm) + (1.0 - self.lam) * wdl_stm
+        target = self.lam * _cp_to_prob(score_stm * self.score_scale) + (1.0 - self.lam) * wdl_stm
         return stm_feats, opp_feats, float(target)
 
 
@@ -127,9 +150,10 @@ def train(args) -> None:
     print(f'Device   : {device}')
     print(f'Dims     : {NNUE_DIMS}   FT→{L1}  L2→{L2}  L3→{L3}→1')
 
-    dataset = MakrukDataset(args.input, lam=args.lam)
+    dataset = MakrukDataset(args.input, lam=args.lam, color_augment=args.color_augment,
+                            score_scale=args.score_scale)
     n = len(dataset)
-    print(f'Samples  : {n}')
+    print(f'Samples  : {n}{"  (×2 color-augmented)" if args.color_augment else ""}')
     if n == 0:
         print('ERROR: empty dataset', file=sys.stderr)
         sys.exit(1)
@@ -141,8 +165,20 @@ def train(args) -> None:
         generator=torch.Generator().manual_seed(42),
     )
 
-    train_dl = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                          collate_fn=_collate, num_workers=0)
+    if args.score_boost > 1.0:
+        all_weights = dataset.sample_weights(args.score_boost)
+        train_indices = train_ds.indices  # type: ignore[attr-defined]
+        train_weights = torch.tensor([all_weights[i] for i in train_indices], dtype=torch.float64)
+        sampler = torch.utils.data.WeightedRandomSampler(
+            train_weights, num_samples=train_n, replacement=True,
+        )
+        high = sum(1 for w in train_weights.tolist() if w >= args.score_boost)
+        print(f'ScoreBoost: {args.score_boost}x  high-score positions: {high}/{train_n}')
+        train_dl = DataLoader(train_ds, batch_size=args.batch_size, sampler=sampler,
+                              collate_fn=_collate, num_workers=0)
+    else:
+        train_dl = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
+                              collate_fn=_collate, num_workers=0)
     val_dl   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False,
                           collate_fn=_collate, num_workers=0)
 
@@ -203,6 +239,13 @@ def main() -> None:
                     help='Adam learning rate')
     ap.add_argument('--lam',        type=float, default=0.5,
                     help='Score weight in target: 1.0=score-only, 0.0=result-only')
+    ap.add_argument('--score-boost', type=float, default=1.0,
+                    help='Oversample |score|>500cp positions by this factor (e.g. 10.0)')
+    ap.add_argument('--color-augment', action='store_true',
+                    help='Double the dataset by adding color-flipped positions (fixes White-bias)')
+    ap.add_argument('--score-scale', type=float, default=1.0,
+                    help='Multiply teacher labels by this factor before sigmoid (e.g. 1.82 to '
+                         'align Fairy-SF cp scale with classical eval)')
     args = ap.parse_args()
     train(args)
 
