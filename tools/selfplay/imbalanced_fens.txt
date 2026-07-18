@@ -1,0 +1,22 @@
+# Imbalanced Makruk starting positions for decisive_v4 data generation.
+# Standard start: rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+# Piece layout rank 1 (White): R(a1) N(b1) S(c1) K(d1) M(e1) S(f1) N(g1) R(h1)
+# Piece layout rank 8 (Black): r(a8) n(b8) s(c8) m(d8) k(e8) s(f8) n(g8) r(h8)
+#
+# White-advantaged (Black missing one piece): expected Fairy-SF label 400–1400 cp
+1nsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+rnsmksn1/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+r1smksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+rnsmks1r/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+rn1mksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+rnsmk1nr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+rns1ksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+#
+# Black-advantaged (White missing one piece): expected Fairy-SF label -400 – -1400 cp
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/1NSKMSNR w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSN1 w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/R1SKMSNR w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMS1R w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RN1KMSNR w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKM1NR w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSK1SNR w - - 0 1

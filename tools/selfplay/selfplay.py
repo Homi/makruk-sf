@@ -98,7 +98,8 @@ ALL_MODES = [MODE_NORMAL, MODE_TIME_HANDICAP, MODE_DEPTH_HANDICAP, MODE_RANDOM_O
 class Engine:
     """Manage a single UCI engine subprocess."""
 
-    def __init__(self, path: str, hash_mb: int, threads: int) -> None:
+    def __init__(self, path: str, hash_mb: int, threads: int,
+                 use_counting: bool = True) -> None:
         self._proc = subprocess.Popen(
             [path],
             stdin=subprocess.PIPE,
@@ -112,6 +113,11 @@ class Engine:
         self._send("setoption name UCI_Variant value makruk")
         self._send(f"setoption name Hash value {hash_mb}")
         self._send(f"setoption name Threads value {threads}")
+        # Disable Makruk counting draw for data generation so material-imbalance
+        # endgames are played out (and evaluated with real, non-zero scores)
+        # rather than being drawn by counting. Never use for real play.
+        if not use_counting:
+            self._send("setoption name UseCounting value false")
         self._send("isready")
         self._wait_for("readyok")
 
@@ -136,14 +142,15 @@ class Engine:
         moves: list[str],
         movetime_ms: int | None = None,
         depth: int | None = None,
+        start_fen: str | None = None,
     ) -> tuple[str | None, int | None, bool]:
         """
-        Search from the Makruk start position + moves list.
+        Search from start_fen (or the Makruk start position) + moves list.
 
         Returns (bestmove, score_cp, is_mate_score).
         bestmove is None when no legal move exists (checkmate / stalemate).
         """
-        pos_cmd = "position fen " + MAKRUK_START_FEN
+        pos_cmd = "position fen " + (start_fen or MAKRUK_START_FEN)
         if moves:
             pos_cmd += " moves " + " ".join(moves)
         self._send(pos_cmd)
@@ -176,18 +183,24 @@ class Engine:
         moves: list[str],
         movetime_ms: int,
         top_n: int,
+        start_fen: str | None = None,
+        depth: int | None = None,
     ) -> list[tuple[str, int | None]]:
         """
         Search with MultiPV and return up to top_n (move, score_cp) pairs
         in descending quality order.  Falls back gracefully to bestmove only.
+        When `depth` is given, search to a fixed depth instead of by movetime.
         """
         self.set_option("MultiPV", top_n)
 
-        pos_cmd = "position fen " + MAKRUK_START_FEN
+        pos_cmd = "position fen " + (start_fen or MAKRUK_START_FEN)
         if moves:
             pos_cmd += " moves " + " ".join(moves)
         self._send(pos_cmd)
-        self._send(f"go movetime {movetime_ms}")
+        if depth is not None:
+            self._send(f"go depth {depth}")
+        else:
+            self._send(f"go movetime {movetime_ms}")
 
         candidates: dict[int, tuple[str, int | None]] = {}
 
@@ -250,9 +263,18 @@ def play_game(
     rng: random.Random,
     adjudication_threshold: int = 0,
     adjudication_streak: int = 5,
+    start_fen: str | None = None,
+    strong_depth: int | None = None,
 ) -> dict:
-    """Play one game; return a complete game record."""
+    """Play one game; return a complete game record.
+
+    When `strong_depth` is set, the strong side (and opening) searches to a
+    fixed depth instead of by movetime.  This is a workaround for a search
+    crash on strongly-winning positions at depth >=9 (see CLAUDE.md); capping
+    the strong side at depth <=8 avoids the crash during data generation.
+    """
     engine.new_game()
+    fen = start_fen or MAKRUK_START_FEN
 
     moves:  list[str]       = []
     scores: list[int | None] = []
@@ -267,23 +289,31 @@ def play_game(
 
         # Determine search parameters for this ply
         if ply < opening_plies and opening_top_n > 1:
-            # Random opening: use MultiPV to get candidates then pick one
-            candidates = engine.search_multipv(moves, movetime_ms, opening_top_n)
+            # Random opening: use MultiPV to get candidates then pick one.
+            # Cap depth (strong_depth) so imbalanced openings don't hit the
+            # depth>=9 crash on already-winning positions.
+            candidates = engine.search_multipv(moves, movetime_ms, opening_top_n,
+                                               start_fen=fen, depth=strong_depth)
             if candidates:
                 mv, score_cp = rng.choice(candidates)
                 is_mate = False
+            elif strong_depth is not None:
+                mv, score_cp, is_mate = engine.search(moves, depth=strong_depth, start_fen=fen)
             else:
-                mv, score_cp, is_mate = engine.search(moves, movetime_ms=movetime_ms)
+                mv, score_cp, is_mate = engine.search(moves, movetime_ms=movetime_ms, start_fen=fen)
         elif mode == MODE_TIME_HANDICAP and not is_white:
             # Black plays at reduced movetime
             weak_ms = max(1, int(movetime_ms * handicap_ratio))
-            mv, score_cp, is_mate = engine.search(moves, movetime_ms=weak_ms)
+            mv, score_cp, is_mate = engine.search(moves, movetime_ms=weak_ms, start_fen=fen)
         elif mode == MODE_DEPTH_HANDICAP and not is_white:
             # Black plays at fixed depth
-            mv, score_cp, is_mate = engine.search(moves, depth=depth_cap)
+            mv, score_cp, is_mate = engine.search(moves, depth=depth_cap, start_fen=fen)
+        elif strong_depth is not None:
+            # Strong side at a fixed depth (crash-safe workaround)
+            mv, score_cp, is_mate = engine.search(moves, depth=strong_depth, start_fen=fen)
         else:
             # Normal movetime search
-            mv, score_cp, is_mate = engine.search(moves, movetime_ms=movetime_ms)
+            mv, score_cp, is_mate = engine.search(moves, movetime_ms=movetime_ms, start_fen=fen)
 
         if mv is None:
             if is_mate and score_cp == 0:
@@ -303,7 +333,7 @@ def play_game(
         if is_mate:
             white_score = 30000 if is_white else -30000
 
-        if score_cp == 0 and not is_mate:
+        if score_cp is not None and abs(score_cp) <= 2 and not is_mate:
             zero_streak += 1
         else:
             zero_streak = 0
@@ -334,7 +364,7 @@ def play_game(
             termination = "repetition"
             break
 
-        if ply >= 40 and zero_streak >= 16:
+        if ply >= 20 and zero_streak >= 6:
             result = "1/2-1/2"
             termination = "draw_score"
             break
@@ -345,7 +375,7 @@ def play_game(
     record: dict = {
         "game_id":    game_id,
         "date":       date.today().isoformat(),
-        "start_fen":  MAKRUK_START_FEN,
+        "start_fen":  fen,
         "moves":      moves,
         "scores":     scores,
         "result":     result,
@@ -481,6 +511,17 @@ def main() -> None:
                         help="Output directory")
     parser.add_argument("--resume",   action="store_true",
                         help="Resume from last completed game (append to outputs)")
+    parser.add_argument("--fens-file", default=None,
+                        help="File with one start FEN per line; each game picks a random FEN. "
+                             "Lines starting with '#' and blank lines are ignored.")
+    parser.add_argument("--no-counting", action="store_true",
+                        help="Disable Makruk counting draw in the engine (UseCounting=false). "
+                             "Data generation only: forces material-imbalance endgames to be "
+                             "played out with real, non-zero eval scores. Never for real play.")
+    parser.add_argument("--strong-depth", type=int, default=0,
+                        help="Search the strong side (and openings) at this fixed depth instead "
+                             "of by movetime. Set <=8 to avoid the depth>=9 search crash on "
+                             "strongly-winning positions during data generation. 0 = use movetime.")
     args = parser.parse_args()
 
     out_dir = Path(args.outdir)
@@ -495,6 +536,21 @@ def main() -> None:
         print("ERROR: --handicap-ratio must be between 0.0 and 1.0 (exclusive)",
               file=sys.stderr)
         sys.exit(1)
+
+    start_fens: list[str] = []
+    if args.fens_file:
+        fens_path = Path(args.fens_file)
+        if not fens_path.exists():
+            print(f"ERROR: fens-file not found: {fens_path}", file=sys.stderr)
+            sys.exit(1)
+        for line in fens_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith('#'):
+                start_fens.append(line)
+        if not start_fens:
+            print("ERROR: fens-file is empty or has no valid FEN lines", file=sys.stderr)
+            sys.exit(1)
+        print(f"FENs     : {len(start_fens)} imbalanced start positions from {fens_path.name}")
 
     state = load_state(out_dir) if args.resume else {"games_completed": 0}
     already_done = state["games_completed"]
@@ -526,8 +582,13 @@ def main() -> None:
         print(f"Resuming : continuing after game {already_done}")
     print()
 
+    if args.no_counting:
+        print("Counting : DISABLED (UseCounting=false) — data generation mode")
+    if args.strong_depth:
+        print(f"StrongDep: fixed depth {args.strong_depth} (crash-safe workaround)")
     rng       = random.Random(args.seed)
-    engine    = Engine(str(engine_path), hash_mb=args.hash, threads=args.threads)
+    engine    = Engine(str(engine_path), hash_mb=args.hash, threads=args.threads,
+                       use_counting=not args.no_counting)
     open_mode = "a" if args.resume else "w"
 
     games_written = 0
@@ -537,6 +598,7 @@ def main() -> None:
             for gid in range(first_game, last_game + 1):
                 t0 = time.monotonic()
                 try:
+                    game_fen = rng.choice(start_fens) if start_fens else None
                     game = play_game(
                         engine, gid, args.movetime,
                         mode=args.mode,
@@ -547,6 +609,8 @@ def main() -> None:
                         adjudication_threshold=args.adjudication_threshold,
                         adjudication_streak=args.adjudication_streak,
                         rng=rng,
+                        start_fen=game_fen,
+                        strong_depth=args.strong_depth or None,
                     )
                 except Exception as exc:
                     print(f"\nERROR on game {gid}: {exc}", file=sys.stderr)

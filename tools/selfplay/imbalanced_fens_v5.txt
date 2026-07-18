@@ -1,0 +1,22 @@
+# decisive_v5: Makruk starting positions with 2 pieces removed per side.
+# Standard start: rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+# Piece layout: R(a) N(b) S(c) K/M(d/e) S(f) N(g) R(h)
+# Expected Fairy-SF labels: ~800–1800 cp (wider than v4)
+#
+# White-advantaged (Black missing 2 pieces)
+r2mksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+rnsmk2r/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+r1smks1r/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+rn1mk1nr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+r1s1ksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+rn2ksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+rns1ks1r/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1
+#
+# Black-advantaged (White missing 2 pieces)
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/R2KMSNR w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKM2R w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/R1SKMS1R w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RN1KM1NR w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/R1SK1SNR w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RN1K1SNR w - - 0 1
+rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSK1S1R w - - 0 1
