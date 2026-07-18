@@ -126,8 +126,8 @@ namespace Nebula{
     {
         const MakrukMaterialSignature sig = computeMakrukMaterialSignature(*this);
         Color claimant;
-        if (shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy))
-            activateMakrukCounting(st->makrukCounting, *this, claimant, MakrukCountingMode::Fairy);
+        if (shouldActivateMakrukCounting(sig, claimant, gMakrukCountingMode))
+            activateMakrukCounting(st->makrukCounting, *this, claimant, gMakrukCountingMode);
         // Otherwise makrukCounting stays zeroed (inactive) from the memset above.
     }
 
@@ -472,8 +472,8 @@ namespace Nebula{
     if (!st->makrukCounting.active) {
         const MakrukMaterialSignature sig = computeMakrukMaterialSignature(*this);
         Color claimant;
-        if (shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy))
-            activateMakrukCounting(st->makrukCounting, *this, claimant, MakrukCountingMode::Fairy);
+        if (shouldActivateMakrukCounting(sig, claimant, gMakrukCountingMode))
+            activateMakrukCounting(st->makrukCounting, *this, claimant, gMakrukCountingMode);
     } else {
         updateMakrukCountingState(st->makrukCounting, *this);
     }
