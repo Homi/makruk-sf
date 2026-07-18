@@ -59,6 +59,7 @@ endif
 SRCS = bitboard.cpp evaluate.cpp main.cpp misc.cpp movepick.cpp position.cpp \
 	search.cpp thread.cpp timeman.cpp tt.cpp uci.cpp ucioption.cpp \
 	nnue/evaluate_nnue.cpp nnue/features/half_ka_v2_makruk.cpp \
+	nnue/mknn_evaluator.cpp \
 	makruk/makruk_counting.cpp \
 	makruk/makruk_eval.cpp
 
