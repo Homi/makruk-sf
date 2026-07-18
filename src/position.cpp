@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <sstream>
@@ -151,6 +152,17 @@ namespace Nebula{
     si->blockersForKing[WHITE]=sliderBlockers(pieces(BLACK),square<KING>(WHITE),si->pinners[BLACK]);
     si->blockersForKing[BLACK]=sliderBlockers(pieces(WHITE),square<KING>(BLACK),si->pinners[WHITE]);
     const Square ksq=square<KING>(~sideToMove);
+    if (ksq==SQ_NONE){
+      // Defensive hardening (2026-07-18): this is the confirmed crash site of an
+      // unfixed heisenbug (see CLAUDE.md "Round 10 -- Search crash discovered") where
+      // ksq==SQ_NONE (lsb of an empty king bitboard) fed attacksBb<ROOK> below, reading
+      // RookMagics[64] out of bounds -> SIGSEGV. Root cause (what corrupts the king
+      // bitboard) is still unknown; this only stops the OOB read and reports the
+      // corrupted position instead of segfaulting on garbage memory.
+      std::cerr<<"FATAL: Position::setCheckInfo missing king for side "
+               <<int(~sideToMove)<<" at ply "<<gamePly<<"\nFEN: "<<fen()<<std::endl;
+      std::abort();
+    }
     si->checkSquares[PAWN]=pawnAttacksBb(~sideToMove,ksq);
     si->checkSquares[KNIGHT]=attacksBb<KNIGHT>(ksq);
     // Khon check squares: reverse-color lookup (squares from which our Khon checks enemy king)

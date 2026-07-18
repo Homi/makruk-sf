@@ -1,5 +1,6 @@
 #pragma once
 #include <chrono>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -93,7 +94,20 @@ namespace Nebula{
   class ValueList{
   public:
     [[nodiscard]] std::size_t size() const{ return size_; }
-    void pushBack(const T& value){ values_[size_++]=value; }
+    void pushBack(const T& value){
+      // Defensive hardening (2026-07-18): pushBack previously had no bounds check,
+      // so an overflow silently wrote past values_[MaxSize-1] and corrupted whatever
+      // memory followed it. Not confirmed as the cause of the depth>=9 SIGSEGV
+      // (see CLAUDE.md "Round 10 -- Search crash discovered"), but this is the exact
+      // failure mode that bug's memory-corruption signature would produce, so this
+      // turns any future overflow into an immediate, diagnosable abort instead of
+      // silent corruption that surfaces as an unrelated crash later.
+      if (size_>=MaxSize){
+        std::cerr<<"FATAL: ValueList::pushBack overflow (MaxSize="<<MaxSize<<")"<<std::endl;
+        std::abort();
+      }
+      values_[size_++]=value;
+    }
     const T* begin() const{ return values_; }
     const T* end() const{ return values_+size_; }
   private:
