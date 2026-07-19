@@ -1852,3 +1852,99 @@ N=50+N=100.
 result didn't overturn the direction, it reinforced it. `src/evaluate.h` and the tracked net
 binary are unchanged; this was a verification pass only, not a new training/deploy step.
 All 29 tests and a clean rebuild reverified after swapping nets twice for this comparison.
+
+## Round 12 — Scale-Up Attempt: Regression, Not Deployed (2026-07-19)
+
+### Motivation
+
+Round 11's closer-handicap-gauntlet method was the first in this project's history to beat
+v7, confirmed at N=100 (+164 vs v7's +151). Round 12 scaled up the same method: more games
+(300 vs Round 11's 80), and tested an even closer handicap (depth-b=5, not just depth-b=4)
+based on Round 11's finding that closing the gap via opponent *strength* produced more
+draws than closing it via *time*.
+
+### Data generation — 3 configs, 300 games total
+
+* Config A: 100 games, `movetime-a=200 depth-b=4`, seed=6001 → 35W 61D 4L, **61% draws**
+* Config B: 100 games, `movetime-a=200 depth-b=5`, seed=6002 → 30W 64D 6L, **64% draws**
+  (highest draw rate of any config in this project; also the highest Fairy-SF win rate,
+  6%, helping the historically underrepresented Black-win training class)
+* Config C: 100 games, `movetime-a=150 depth-b=3`, seed=6003 → 47W 51D 2L, 51% draws
+
+All three confirmed the "closer-via-strength beats closer-via-time" pattern at much larger
+N than Round 11's 40-game samples showed it.
+
+### Teacher-labeling and filtering
+
+* 23,148 raw positions (convert.py, min-ply=4) → 22,416 scored (Fairy-SF depth=10,
+  8.2 min at ~47 pos/sec; 504 bare-king dropped, 114 out of range)
+* Filtered to blend range (30–400cp): **13,820 accepted (84%)** — consistent with Round
+  11's 85%, confirming the acceptance rate is a repeatable property of the method, not a
+  fluke of the smaller Round 11 sample
+* Combined with `train_round11_combined.tsv` (217,448) → **231,268 positions** (+6.3%,
+  a much larger addition than Round 11's own +1.7%). `dataset_summary.py`: Black-win
+  representation improved further to 7.1% (vs Round 11's 6.2%), duplication low (0.3%) —
+  nothing in the pre-training data validation looked unhealthy.
+
+### Training
+
+Identical recipe to Round 11/v7 (epochs=60, lam=0.7, score-boost=2.0, color-augment,
+L1=512), ~8 hours CPU-only. Best epoch 59, val_loss=**0.545124** — virtually identical to
+Round 11's 0.545117, consistent with val_loss having plateaued at this data scale
+regardless of how much more data is added.
+
+### Gauntlet result — REGRESSION
+
+Went straight to N=100 (per the updated protocol from the Round 11 follow-up, skipping the
+now-known-unreliable N=50 step) against the same standard baseline used for the Round 11
+confirmatory test:
+
+* **Round 12 net: 35W 61D 4L → Elo +111**
+* Round 11 net (current baseline): 46W 52D 2L → Elo +164
+* **−53 Elo** — a clear regression, not noise (4× the size of the Round 11-vs-v7 gap that
+  was just confirmed as real at this same N=100 sample size)
+
+### Decision: NOT deployed
+
+Reverted immediately: `src/evaluate.h` restored to `1204655067.bin` (Round 11 net),
+rebuilt, full 29-test suite + perft depth 5 reverified clean. Round 12 net
+(`1879610562.bin`) was not committed and the exported `.bin` was deleted as scratch cleanup;
+the checkpoint `tools/training/makruk_round12.pt` (gitignored, not deleted) is kept and can
+be re-exported via `export_int16.py` if a future ablation investigation needs it.
+
+### Root cause — NOT investigated, hypothesis only
+
+Unlike Round 10's regression (where the cause — extreme-imbalance data diluting blend-range
+signal — was identified with reasonable confidence), Round 12's regression has **no
+confirmed explanation**. What's known:
+
+* It is not a data-quality problem in the obvious sense: acceptance rate, duplication rate,
+  and val_loss all looked as healthy as Round 11's.
+* Config B (depth-b=5, the closest handicap) contributed the most raw positions (9,038 of
+  23,148, ~39%) and had the highest draw rate (64%) — i.e., it's overrepresented in the
+  new data relative to configs A and C.
+
+**Unconfirmed hypothesis**: positions from a handicap that's this close to genuine parity
+may carry *noisier* labels even from a depth=10 teacher — near-truly-equal positions have
+less decisive, more search-order-dependent evaluations move-to-move than positions with a
+real (if modest) handicap-driven imbalance. If so, Config B's disproportionate volume could
+have diluted training signal quality despite every position nominally landing inside the
+30–400cp "blend range" bucket by score alone. This has **not been tested** (would require
+an ablation: retrain with only configs A+C, or only B, and compare) — flagged as the
+natural next step if this direction is pursued further, not asserted as fact.
+
+### Full Benchmark Progression (N=100, seed=99, Fairy-SF-NNUE depth=3, adj 500cp/5)
+
+| Config | Result | Elo | Notes |
+| ------ | ------ | --- | ----- |
+| Round 11 net (currently embedded) | 46W 52D 2L | **+164** | best confirmed result |
+| v7 net | 44W 53D 3L | +151 | previous best |
+| Round 12 net | 35W 61D 4L | +111 | regression, not deployed |
+
+### Net Archive — Round 12
+
+* `src/1204655067.bin` — Round 11 net, Elo +164 (N=100) — **currently embedded, unchanged**
+* `tools/training/makruk_round12.pt` — Round 12 checkpoint (CRC32=1879610562 when
+  exported), val_loss 0.545124, Elo +111 (N=100) regression, not deployed, gitignored but
+  kept on disk for a possible future ablation investigation (re-export via
+  `export_int16.py` if needed)
