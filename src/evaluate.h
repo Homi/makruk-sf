@@ -9,7 +9,7 @@ namespace Nebula{
   namespace Eval{
     Value evaluate(const Position& pos, int* complexity=nullptr);
     extern std::string currentNnueNetName;
-#define NnueNetDefaultName   "1204655067.bin"
+#define NnueNetDefaultName   "2605356533.bin"
 
     namespace Nnue{
       Value evaluate(const Position& pos, bool adjusted=false, int* complexity=nullptr);
