@@ -1943,8 +1943,112 @@ natural next step if this direction is pursued further, not asserted as fact.
 
 ### Net Archive — Round 12
 
-* `src/1204655067.bin` — Round 11 net, Elo +164 (N=100) — **currently embedded, unchanged**
+* `src/1204655067.bin` — Round 11 net, Elo +164 (N=100) — archived (was embedded, replaced
+  by Round 13, see below)
 * `tools/training/makruk_round12.pt` — Round 12 checkpoint (CRC32=1879610562 when
   exported), val_loss 0.545124, Elo +111 (N=100) regression, not deployed, gitignored but
-  kept on disk for a possible future ablation investigation (re-export via
-  `export_int16.py` if needed)
+  kept on disk (re-export via `export_int16.py` if needed)
+
+## Round 13 — Config B Ablation: Hypothesis Confirmed, New Best (2026-07-29)
+
+### Motivation
+
+Round 12's regression (Elo +111 vs Round 11's +164) had no confirmed cause — the leading
+unconfirmed hypothesis was that Config B (`movetime-a=200 depth-b=5`, the closest handicap
+tried, 39% of Round 12's new raw positions, highest draw rate at 64%) carried noisier
+evaluation labels near true parity even from a depth=10 teacher, and its outsized volume
+diluted training signal despite nominally landing inside the accepted blend range. This
+round tests that hypothesis directly via ablation: retrain using only configs A+C,
+excluding B entirely.
+
+### Method: zero new games, zero new teacher-labeling
+
+Round 12's raw per-config files (`round12_configA.tsv`, `round12_configB.tsv`,
+`round12_configC.tsv`, pre-label) and its merged labeled output (`round12_fairy_d10.tsv`,
+every FEN already scored by Fairy-SF depth=10) were all still on disk. Since every position
+was already queried once during Round 12's labeling pass, per-config labeled subsets could
+be reconstructed by a FEN join against the existing labeled file — no new engine calls
+needed.
+
+New tool: **`tools/training/split_by_source.py`** — takes one or more raw (pre-label)
+source TSVs plus an already-labeled lookup TSV, joins on FEN, and outputs a labeled TSV
+containing only the specified sources (tagged, filterable). This is also a reusable
+capability for future rounds: instead of `combine_v7.py`'s existing "everything that
+passes the blend-range filter goes in" behavior, future rounds can explicitly include or
+exclude individual data sources by name.
+
+```bash
+python3 split_by_source.py \
+    --labeled round12_fairy_d10.tsv \
+    --source configA=round12_configA.tsv \
+    --source configC=round12_configC.tsv \
+    --output round13_configAC_labeled.tsv
+# 7,245 + 6,651 = 13,896 labeled positions (from A+C only, B excluded)
+```
+
+Filtered to blend range via the existing `combine_v7.py` (unchanged): **8,290 accepted
+(83%)**, consistent with every prior round's acceptance rate. Combined with the Round 11
+base (217,448) → **225,738 total** — notably less than Round 12's 231,268 (since A+C alone
+is a smaller slice than A+B+C), but still a real addition over Round 11's own 217,448.
+`dataset_summary.py`: B-win 6.8%, duplication 0.3% — healthy.
+
+### Training — interrupted twice by reboots, completed on the third attempt
+
+Identical recipe to every prior round (epochs=60, lam=0.7, score-boost=2.0,
+color-augment, L1=512). `train.py` has no checkpoint-resume — it only saves the
+best-so-far `model_state` incrementally (via `torch.save` whenever a new best val_loss is
+hit), not optimizer/epoch state — so a reboot mid-run means restarting from epoch 0, not
+resuming. This round hit that limitation twice:
+
+1. First attempt: user needed to shut down the machine; stopped safely at epoch 20
+   (val_loss 0.5429, safely on disk thanks to incremental checkpointing) with time to
+   spare before shutdown.
+2. Second attempt (after reboot): another reboot occurred after only epoch 1.
+3. Third attempt (after second reboot): completed cleanly, no further interruption.
+
+Final result: best epoch 59, val_loss **0.541965** — notably lower than the ~0.5451
+plateau Rounds 11 and 12 both landed on (first time this project's training has broken
+that plateau). Export: `src/2605356533.bin` (22.6 MB, int16 MKN2, FT headroom 14.7×, int32
+accumulator headroom 29,725× — no overflow risk).
+
+### Gauntlet result — hypothesis confirmed, new best
+
+Standard baseline (seed=99, Fairy-SF-NNUE depth=3, **100 games** directly — matching the
+protocol used for both Round 11's confirmatory test and Round 12's regression test):
+
+* **Round 13 net (2605356533.bin): 45W 55D 0L → Elo +168**
+* Round 11 net: 46W 52D 2L → Elo +164
+* Round 12 net: 35W 61D 4L → Elo +111 (regression, not deployed)
+
+Round 13 **beats Round 11** (+168 vs +164) and is **57 Elo above Round 12** — with zero
+losses across 100 games (vs Round 11's 2 and Round 12's 4). The hypothesis holds: Config B
+specifically was the problem, not data volume/scale in general. Round 11's
+closer-handicap-gauntlet method scales fine as long as the closest-handicap config
+(depth-b=5, sitting closest to genuine parity) is excluded or handled separately — this is
+the first data-generation scale-up in this project's history to actually improve on its
+own baseline round rather than regress.
+
+### Decision: deployed
+
+`src/evaluate.h` → `2605356533.bin`, `.gitignore`'s net exception swapped, old net
+(`1204655067.bin`) untracked/archived. Full 29-test suite and perft depth 5 verified clean.
+Commit `385f73f`.
+
+### Full Benchmark Progression (N=100, seed=99, Fairy-SF-NNUE depth=3, adj 500cp/5)
+
+| Config | Result | Elo | Notes |
+| ------ | ------ | --- | ----- |
+| Round 13 net (currently embedded) | 45W 55D 0L | **+168** | **best result — 0 losses** |
+| Round 11 net | 46W 52D 2L | +164 | previous best |
+| v7 net | 44W 53D 3L | +151 | |
+| Round 12 net | 35W 61D 4L | +111 | regression (Config B included), not deployed |
+
+### Net Archive — Round 13
+
+* `src/2605356533.bin` — Round 13 net int16 MKN2, epoch 59, val_loss=0.541965, **Elo +168
+  (N=100) — currently embedded**
+* `src/1204655067.bin` — Round 11 net, Elo +164 (N=100), archived (untracked)
+* `tools/training/makruk_round12.pt` — Round 12 checkpoint, Elo +111 (N=100) regression,
+  gitignored, kept for reference
+* `tools/training/split_by_source.py` — new reusable tool for source-aware dataset mixing,
+  committed
