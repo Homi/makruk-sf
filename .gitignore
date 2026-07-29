@@ -6,6 +6,9 @@ __pycache__/
 
 # Build artifacts
 *.o
+*.exe
+*.pdb
+*.ilk
 src/.depend
 src/sf-kernel
 src/sf-kernel-classical
