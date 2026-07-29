@@ -5,6 +5,10 @@
 set -e
 cd "$(dirname "$0")/.."
 
+ENGINE_SRCS="bitboard.cpp misc.cpp movepick.cpp position.cpp search.cpp \
+  thread.cpp timeman.cpp tt.cpp uci.cpp ucioption.cpp evaluate.cpp \
+  nnue/evaluate_nnue.cpp nnue/features/half_ka_v2_makruk.cpp \
+  nnue/mknn_evaluator.cpp"
 cp ../net/1877415756.bin . 2>/dev/null || true
 
 ENGINE_SRCS="bitboard.cpp misc.cpp movepick.cpp position.cpp search.cpp \

@@ -10,6 +10,10 @@
 
 namespace Nebula {
 
+// Active counting mode (see makruk_counting.h). Fairy by default; the
+// "UseCounting" UCI option sets this to Off for training data generation.
+MakrukCountingMode gMakrukCountingMode = MakrukCountingMode::Fairy;
+
 // ---------------------------------------------------------------------------
 // Material signature
 // ---------------------------------------------------------------------------

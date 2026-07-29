@@ -3,3 +3,26 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Build artifacts
+*.o
+src/.depend
+src/sf-kernel
+src/sf-kernel-classical
+src/makruk_tests
+src/makruk_tests_asan
+src/makruk_tests_debug
+out/
+
+# Generated/experiment data (regenerable via training & selfplay pipelines)
+tools/selfplay/out/
+tools/training/*.pt
+tools/training/*.pt.bak
+tools/training/*.tsv
+tools/training/*.log
+tools/gauntlet_out/
+src/makruk/temp_note.txt
+
+# Archived NNUE net binaries - only the currently-embedded net is tracked
+src/*.bin
+!src/2020277415.bin

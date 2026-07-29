@@ -92,6 +92,17 @@ namespace CountingLimits {
 }  // namespace CountingLimits
 
 // ---------------------------------------------------------------------------
+// Global counting mode
+// ---------------------------------------------------------------------------
+// The active counting mode used by Position when activating/maintaining counting
+// state. Defaults to Fairy (real game rules). The "UseCounting" UCI option flips
+// this to Off, which disables counting draw entirely — used ONLY for training
+// data generation so material-imbalance endgames are played out (and evaluated
+// with real scores) instead of being drawn by counting. Gauntlet/real play must
+// keep this at Fairy.
+extern MakrukCountingMode gMakrukCountingMode;
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
