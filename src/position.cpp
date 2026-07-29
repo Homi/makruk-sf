@@ -129,6 +129,8 @@ namespace Nebula{
         Color claimant;
         if (shouldActivateMakrukCounting(sig, claimant, gMakrukCountingMode))
             activateMakrukCounting(st->makrukCounting, *this, claimant, gMakrukCountingMode);
+        if (shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy))
+            activateMakrukCounting(st->makrukCounting, *this, claimant, MakrukCountingMode::Fairy);
         // Otherwise makrukCounting stays zeroed (inactive) from the memset above.
     }
 
@@ -486,6 +488,8 @@ namespace Nebula{
         Color claimant;
         if (shouldActivateMakrukCounting(sig, claimant, gMakrukCountingMode))
             activateMakrukCounting(st->makrukCounting, *this, claimant, gMakrukCountingMode);
+        if (shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy))
+            activateMakrukCounting(st->makrukCounting, *this, claimant, MakrukCountingMode::Fairy);
     } else {
         updateMakrukCountingState(st->makrukCounting, *this);
     }

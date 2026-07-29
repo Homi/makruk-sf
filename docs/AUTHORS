@@ -1,3 +1,13 @@
+# Makruk-SF maintainer
+
+Homi <bhome1@hotmail.com>
+
+Makruk-SF-specific modifications, Makruk rules, Makruk counting, Makruk evaluation, Makruk NNUE design, and training pipeline.
+
+# Upstream authors
+
+The following author list is inherited from the upstream Stockfish / sf-kernel project history.
+
 # Founders of the Stockfish project and Fishtest infrastructure
 Tord Romstad (romstad)
 Marco Costalba (mcostalba)

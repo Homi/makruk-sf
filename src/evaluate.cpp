@@ -13,6 +13,8 @@ using namespace std;
 
 // INCBIN embeds the default net binary into the executable at compile time.
 // The symbols are in the global namespace.
+#include "incbin/incbin.h"
+#include "makruk/makruk_eval.h"
 #if !defined(_MSC_VER) && !defined(NNUE_EMBEDDING_OFF)
 #include "incbin/incbin.h"
 INCBIN(EmbeddedNNUE, NnueNetDefaultName);
@@ -73,5 +75,10 @@ namespace Nebula{
                                      int(VALUE_TB_WIN_IN_MAX_PLY)  - 1));
     }
     return std::clamp(classical, VALUE_TB_LOSS_IN_MAX_PLY + 1, VALUE_TB_WIN_IN_MAX_PLY - 1);
+      *complexity=0;
+    const Value v=currentNnueNetName.empty()
+                  ?makrukClassicalEval(pos)
+                  :Nnue::evaluate(pos,false,nullptr);
+    return std::clamp(v,VALUE_TB_LOSS_IN_MAX_PLY+1,VALUE_TB_WIN_IN_MAX_PLY-1);
   }
 }
