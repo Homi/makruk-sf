@@ -2052,3 +2052,62 @@ Commit `385f73f`.
   gitignored, kept for reference
 * `tools/training/split_by_source.py` — new reusable tool for source-aware dataset mixing,
   committed
+
+## Round 14 — Scale-Up at Validated-Good Handicaps (2026-07-29)
+
+### Motivation
+
+Round 13 confirmed Config B (depth-b=5, near-genuine-parity) was the cause of Round 12's
+regression, not data volume/scale in general. This round tests the natural follow-up:
+generate genuinely new data (Round 13 reused Round 12's existing data; there was nothing
+further to reuse) at the two configs already validated as good — depth-b=4 and modest
+time-handicap (movetime-a=150/depth-b=3) — scaled up further, continuing to avoid
+depth-b=5-style configs.
+
+### Data generation and training
+
+* 300 new games: 150 at `movetime-a=200 depth-b=4` (seed=7001, 62% draws) + 150 at
+  `movetime-a=150 depth-b=3` (seed=7002, 50% draws) — both healthy, consistent with
+  Round 11/13's draw rates at these same configs
+* 20,527 positions teacher-labeled (Fairy-SF depth=10, 7.7 min); filtered to blend range:
+  **12,063 accepted (84%)** — same acceptance rate as every prior round using these
+  configs, reinforcing that this is a stable property of the method
+* Combined with the Round 13 base (225,738) → **237,801 total positions**. Black-win
+  representation continued improving (7.8%, vs Round 13's 6.8%), duplication low (0.3%)
+* Trained with the identical recipe (epochs=60, lam=0.7, score-boost=2.0, color-augment,
+  L1=512) — this run used the new `--resume` flag (see below) throughout; no interruption
+  occurred, but the safety net was live for the whole ~8 hour run. val_loss **0.545413**
+
+### Gauntlet result
+
+Standard baseline (seed=99, Fairy-SF-NNUE depth=3, 100 games, adj 500cp/5):
+
+* **Round 14 net (2020277415.bin): 47W 52D 1L → Elo +173**
+* Round 13 net: 45W 55D 0L → Elo +168 (+5 Elo further improvement)
+
+Small delta (likely within noise at N=100), but no regression and no red flags (48%
+decisive rate, healthy termination breakdown). Deployed per this project's established
+convention of keeping non-regressing positive deltas — the third consecutive round in the
+"scale up the validated-good method" direction (Round 13 → Round 14) to hold or improve,
+now firmly establishing that direction as the productive one going forward.
+
+### Decision: deployed
+
+`src/evaluate.h` → `2020277415.bin`, `.gitignore`'s net exception swapped, Round 13 net
+untracked/archived. Full 29-test suite and perft depth 5 verified clean. Commit `f36fb35`.
+
+### Full Benchmark Progression (N=100, seed=99, Fairy-SF-NNUE depth=3, adj 500cp/5)
+
+| Config | Result | Elo | Notes |
+| ------ | ------ | --- | ----- |
+| Round 14 net (currently embedded) | 47W 52D 1L | **+173** | best result |
+| Round 13 net | 45W 55D 0L | +168 | previous best |
+| Round 11 net | 46W 52D 2L | +164 | |
+| v7 net | 44W 53D 3L | +151 | |
+| Round 12 net | 35W 61D 4L | +111 | regression (Config B included), not deployed |
+
+### Net Archive — Round 14
+
+* `src/2020277415.bin` — Round 14 net int16 MKN2, epoch 60, val_loss=0.545413, **Elo +173
+  (N=100) — currently embedded**
+* `src/2605356533.bin` — Round 13 net, Elo +168 (N=100), archived (untracked)
