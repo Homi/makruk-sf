@@ -148,6 +148,7 @@ namespace Nebula {
 
   extern uint64_t pseudoAttacks[PIECE_TYPE_NB][SQUARE_NB]; // attacks ignoring blockers
   extern uint64_t pawnAttacks[COLOR_NB][SQUARE_NB];        // pawn attack tables
+  extern uint64_t khonAttacks[COLOR_NB][SQUARE_NB];        // color-indexed Khon step attacks
 
 
   // -----------------------------------------------------------------------------
@@ -274,6 +275,9 @@ namespace Nebula {
   // Pawn attacks from a single square (lookup table)
   inline uint64_t pawnAttacksBb(const Color c, const Square s) { return pawnAttacks[c][s]; }
 
+  // Khon attacks from a single square — color-dependent step attacks
+  inline uint64_t khonAttacksBb(const Color c, const Square s) { return khonAttacks[c][s]; }
+
 
   // Squares attacked by two pawns
   template <Color C>
@@ -336,26 +340,23 @@ namespace Nebula {
   uint64_t attacksBb(const Square s) { return pseudoAttacks[Pt][s]; }
 
 
-  // Sliding piece attacks using magic bitboards
+  // Piece attacks with occupancy. Rook is the only slider in Makruk.
+  // BISHOP (Khon) and QUEEN (Met) are step pieces — occupancy is ignored.
   template <PieceType Pt>
   uint64_t attacksBb(const Square s, const uint64_t occupied) {
-    if constexpr (Pt == BISHOP)
-      return bishopMagics[s].attacks[bishopMagics[s].index(occupied)];
-    else if constexpr (Pt == ROOK)
+    if constexpr (Pt == ROOK)
       return rookMagics[s].attacks[rookMagics[s].index(occupied)];
-    else if constexpr (Pt == QUEEN)
-      return attacksBb<BISHOP>(s, occupied) | attacksBb<ROOK>(s, occupied);
     else
       return pseudoAttacks[Pt][s];
   }
 
 
-  // Runtime version used when piece type is not known at compile time
+  // Runtime version. Rook is the only slider; all others use pseudoAttacks step tables.
   inline uint64_t attacksBb(const PieceType pt, const Square s, const uint64_t occupied) {
     switch (pt) {
-    case BISHOP: return attacksBb<BISHOP>(s, occupied);
     case ROOK: return attacksBb<ROOK>(s, occupied);
-    case QUEEN: return attacksBb<BISHOP>(s, occupied) | attacksBb<ROOK>(s, occupied);
+    case BISHOP:
+    case QUEEN:
     case PAWN:
     case KNIGHT:
     case KING:

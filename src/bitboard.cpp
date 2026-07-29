@@ -11,6 +11,7 @@ namespace Nebula{
   uint64_t betweenBb[SQUARE_NB][SQUARE_NB];
   uint64_t pseudoAttacks[PIECE_TYPE_NB][SQUARE_NB];
   uint64_t pawnAttacks[COLOR_NB][SQUARE_NB];
+  uint64_t khonAttacks[COLOR_NB][SQUARE_NB];
   Magic rookMagics[SQUARE_NB];
   Magic bishopMagics[SQUARE_NB];
 
@@ -40,25 +41,51 @@ namespace Nebula{
         );
 
     initMagics(ROOK,rookTable,rookMagics);
-    initMagics(BISHOP,bishopTable,bishopMagics);
-    for (Square s1=SQ_A1; s1<=SQ_H8; ++s1){
-      pawnAttacks[WHITE][s1]=pawnAttacksBb<WHITE>(getSquareBb(s1));
-      pawnAttacks[BLACK][s1]=pawnAttacksBb<BLACK>(getSquareBb(s1));
+    initMagics(BISHOP,bishopTable,bishopMagics); // kept; bishop magic unused in Makruk
+
+    // Per-square step and pseudo-attack tables
+    for (Square s=SQ_A1; s<=SQ_H8; ++s){
+      pawnAttacks[WHITE][s]=pawnAttacksBb<WHITE>(getSquareBb(s));
+      pawnAttacks[BLACK][s]=pawnAttacksBb<BLACK>(getSquareBb(s));
+
       for (const int step : {-9,-8,-7,-1,1,7,8,9})
-        pseudoAttacks[KING][s1]|=safeDestination(s1,step);
+        pseudoAttacks[KING][s]|=safeDestination(s,step);
       for (const int step : {-17,-15,-10,-6,6,10,15,17})
-        pseudoAttacks[KNIGHT][s1]|=safeDestination(s1,step);
-      pseudoAttacks[QUEEN][s1]=pseudoAttacks[BISHOP][s1]=attacksBb<BISHOP>(s1,0);
-      pseudoAttacks[QUEEN][s1]|=pseudoAttacks[ROOK][s1]=attacksBb<ROOK>(s1,0);
-      for (const PieceType pt : {BISHOP,ROOK})
-        for (Square s2=SQ_A1; s2<=SQ_H8; ++s2){
-          if (pseudoAttacks[pt][s1]&s2){
-            lineBb[s1][s2]=(attacksBb(pt,s1,0)&attacksBb(pt,s2,0))|s1|s2;
-            betweenBb[s1][s2]=attacksBb(pt,s1,getSquareBb(s2))&attacksBb(pt,s2,getSquareBb(s1));
-          }
-          betweenBb[s1][s2]|=s2;
-        }
+        pseudoAttacks[KNIGHT][s]|=safeDestination(s,step);
+
+      // Rook: full sliding attacks (only slider in Makruk)
+      pseudoAttacks[ROOK][s]=rookMagics[s].attacks[rookMagics[s].index(0)];
+
+      // Met (QUEEN): one step diagonally in any of 4 directions
+      pseudoAttacks[QUEEN][s]=safeDestination(s,NORTH_EAST)
+                             |safeDestination(s,NORTH_WEST)
+                             |safeDestination(s,SOUTH_EAST)
+                             |safeDestination(s,SOUTH_WEST);
+
+      // Khon (BISHOP): one step forward or diagonally — color-dependent
+      khonAttacks[WHITE][s]=safeDestination(s,NORTH)
+                           |safeDestination(s,NORTH_EAST)
+                           |safeDestination(s,NORTH_WEST)
+                           |safeDestination(s,SOUTH_EAST)
+                           |safeDestination(s,SOUTH_WEST);
+      khonAttacks[BLACK][s]=safeDestination(s,SOUTH)
+                           |safeDestination(s,NORTH_EAST)
+                           |safeDestination(s,NORTH_WEST)
+                           |safeDestination(s,SOUTH_EAST)
+                           |safeDestination(s,SOUTH_WEST);
+      // Union stored in pseudoAttacks[BISHOP] for use where color is unknown
+      pseudoAttacks[BISHOP][s]=khonAttacks[WHITE][s]|khonAttacks[BLACK][s];
     }
+
+    // lineBb and betweenBb: Rook only (only slider in Makruk)
+    for (Square s1=SQ_A1; s1<=SQ_H8; ++s1)
+      for (Square s2=SQ_A1; s2<=SQ_H8; ++s2){
+        if (pseudoAttacks[ROOK][s1]&s2){
+          lineBb[s1][s2]=(pseudoAttacks[ROOK][s1]&pseudoAttacks[ROOK][s2])|s1|s2;
+          betweenBb[s1][s2]=attacksBb<ROOK>(s1,getSquareBb(s2))&attacksBb<ROOK>(s2,getSquareBb(s1));
+        }
+        betweenBb[s1][s2]|=s2;
+      }
   }
 
   namespace{

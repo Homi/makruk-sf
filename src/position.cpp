@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <sstream>
@@ -27,7 +28,7 @@ namespace Nebula{
     int h2(const uint64_t h){ return static_cast<int>(h>>16&0x1fff); }
     uint64_t cuckoo[8192];
     Move cuckooMove[8192];
-    const string pieceToChar(" PNBRQK  pnbrqk");
+    const string pieceToChar(" PNSRMK  pnsrmk"); // S=Khon, M=Met
     constexpr Piece pcs[]={
       W_PAWN,W_KNIGHT,W_BISHOP,W_ROOK,W_QUEEN,W_KING,
       B_PAWN,B_KNIGHT,B_BISHOP,B_ROOK,B_QUEEN,B_KING
@@ -120,6 +121,17 @@ namespace Nebula{
     chess960=isChess960;
     thisThread=th;
     setState(st);
+
+    // Initialise Makruk counting state from the FEN position.
+    // If a side is already bare-king with no pawns, counting begins immediately.
+    {
+        const MakrukMaterialSignature sig = computeMakrukMaterialSignature(*this);
+        Color claimant;
+        if (shouldActivateMakrukCounting(sig, claimant, gMakrukCountingMode))
+            activateMakrukCounting(st->makrukCounting, *this, claimant, gMakrukCountingMode);
+        // Otherwise makrukCounting stays zeroed (inactive) from the memset above.
+    }
+
     return *this;
   }
 
@@ -140,11 +152,24 @@ namespace Nebula{
     si->blockersForKing[WHITE]=sliderBlockers(pieces(BLACK),square<KING>(WHITE),si->pinners[BLACK]);
     si->blockersForKing[BLACK]=sliderBlockers(pieces(WHITE),square<KING>(BLACK),si->pinners[WHITE]);
     const Square ksq=square<KING>(~sideToMove);
+    if (ksq==SQ_NONE){
+      // Defensive hardening (2026-07-18): this is the confirmed crash site of an
+      // unfixed heisenbug (see CLAUDE.md "Round 10 -- Search crash discovered") where
+      // ksq==SQ_NONE (lsb of an empty king bitboard) fed attacksBb<ROOK> below, reading
+      // RookMagics[64] out of bounds -> SIGSEGV. Root cause (what corrupts the king
+      // bitboard) is still unknown; this only stops the OOB read and reports the
+      // corrupted position instead of segfaulting on garbage memory.
+      std::cerr<<"FATAL: Position::setCheckInfo missing king for side "
+               <<int(~sideToMove)<<" at ply "<<gamePly<<"\nFEN: "<<fen()<<std::endl;
+      std::abort();
+    }
     si->checkSquares[PAWN]=pawnAttacksBb(~sideToMove,ksq);
     si->checkSquares[KNIGHT]=attacksBb<KNIGHT>(ksq);
-    si->checkSquares[BISHOP]=attacksBb<BISHOP>(ksq,pieces());
+    // Khon check squares: reverse-color lookup (squares from which our Khon checks enemy king)
+    si->checkSquares[BISHOP]=khonAttacksBb(~sideToMove,ksq);
     si->checkSquares[ROOK]=attacksBb<ROOK>(ksq,pieces());
-    si->checkSquares[QUEEN]=si->checkSquares[BISHOP]|si->checkSquares[ROOK];
+    // Met check squares: 4-diagonal steps from enemy king
+    si->checkSquares[QUEEN]=pseudoAttacks[QUEEN][ksq];
     si->checkSquares[KING]=0;
   }
 
@@ -216,8 +241,8 @@ namespace Nebula{
   uint64_t Position::sliderBlockers(const uint64_t sliders, const Square s, uint64_t& pinners) const{
     uint64_t blockers=0;
     pinners=0;
-    uint64_t snipers=((attacksBb<ROOK>(s)&pieces(QUEEN,ROOK))
-      |(attacksBb<BISHOP>(s)&pieces(QUEEN,BISHOP)))&sliders;
+    // Only Rook is a slider in Makruk; Khon and Met are step pieces
+    uint64_t snipers=(attacksBb<ROOK>(s)&pieces(ROOK))&sliders;
     const uint64_t occupancy=pieces()^snipers;
     while (snipers){
       const Square sniperSq=popLsb(snipers);
@@ -234,8 +259,12 @@ namespace Nebula{
     return (pawnAttacksBb(BLACK,s)&pieces(WHITE,PAWN))
       |(pawnAttacksBb(WHITE,s)&pieces(BLACK,PAWN))
       |(attacksBb<KNIGHT>(s)&pieces(KNIGHT))
-      |(attacksBb<ROOK>(s,occupied)&pieces(ROOK,QUEEN))
-      |(attacksBb<BISHOP>(s,occupied)&pieces(BISHOP,QUEEN))
+      |(attacksBb<ROOK>(s,occupied)&pieces(ROOK))
+      // Met: color-independent 4-diagonal step
+      |(pseudoAttacks[QUEEN][s]&pieces(QUEEN))
+      // Khon: color-dependent — reverse-color lookup finds which Khons attack s
+      |(khonAttacksBb(BLACK,s)&pieces(WHITE,BISHOP))
+      |(khonAttacksBb(WHITE,s)&pieces(BLACK,BISHOP))
       |(attacksBb<KING>(s)&pieces(KING));
   }
 
@@ -280,17 +309,19 @@ namespace Nebula{
     if (pieces(us)&to)
       return false;
     if (typeOf(pc)==PAWN){
-      if ((rank8Bb|rank1Bb)&to)
+      // Makruk: pawn cannot land on the promotion rank via a NORMAL move type.
+      // White promotes on rank 6, Black on rank 3; those must use PROMOTION move type.
+      const uint64_t promoRankBb=(us==WHITE)?rank6Bb:rank3Bb;
+      if ((rank8Bb|rank1Bb|promoRankBb)&to)
         return false;
+      // Makruk: no double-step pawn move
       if (!(pawnAttacksBb(us,from)&pieces(~us)&to)
-        &&!(from+pawnPush(us)==to&&empty(to))
-        &&!(from+2*pawnPush(us)==to
-          &&relativeRank(us,from)==RANK_2
-          &&empty(to)
-          &&empty(to-pawnPush(us))))
+        &&!(from+pawnPush(us)==to&&empty(to)))
         return false;
     }
-    else if (!(attacksBb(typeOf(pc),from,pieces())&to))
+    else if (typeOf(pc)==BISHOP
+               ?!(khonAttacksBb(us,from)&to)
+               :!(attacksBb(typeOf(pc),from,pieces())&to))
       return false;
     if (checkers()){
       if (typeOf(pc)!=KING){
@@ -350,7 +381,8 @@ namespace Nebula{
   }
 
   void Position::doMove(const Move m, StateInfo& newSt, const bool givesCheck){
-    thisThread->nodes.fetch_add(1,std::memory_order_relaxed);
+    if (thisThread)
+      thisThread->nodes.fetch_add(1,std::memory_order_relaxed);
     uint64_t k=st->key^Zobrist::side;
     std::memcpy(&newSt,st, offsetof(StateInfo,key));
     newSt.previous=st;
@@ -412,12 +444,8 @@ namespace Nebula{
       movePiece(from,to);
     }
     if (typeOf(pc)==PAWN){
-      if ((static_cast<int>(to)^static_cast<int>(from))==16
-        &&pawnAttacksBb(us,to-pawnPush(us))&pieces(them,PAWN)){
-        st->epSquare=to-pawnPush(us);
-        k^=Zobrist::enpassant[fileOf(st->epSquare)];
-      }
-      else if (typeOf(m)==PROMOTION){
+      // Makruk has no double-step pawn move, so no en-passant square is ever set here.
+      if (typeOf(m)==PROMOTION){
         const Piece promotion=makePiece(us,promotionType(m));
         removePiece(to);
         putPiece(promotion,to);
@@ -450,6 +478,16 @@ namespace Nebula{
           break;
         }
       }
+    }
+
+    // Maintain Makruk counting state for the new position.
+    if (!st->makrukCounting.active) {
+        const MakrukMaterialSignature sig = computeMakrukMaterialSignature(*this);
+        Color claimant;
+        if (shouldActivateMakrukCounting(sig, claimant, gMakrukCountingMode))
+            activateMakrukCounting(st->makrukCounting, *this, claimant, gMakrukCountingMode);
+    } else {
+        updateMakrukCountingState(st->makrukCounting, *this);
     }
   }
 
@@ -606,7 +644,8 @@ namespace Nebula{
   }
 
   bool Position::isDraw(const int ply) const{
-    if (st->rule50>99&&(!checkers()||MoveList<LEGAL>(*this).size()))
+    // Makruk uses counting rules instead of the 50-move rule.
+    if (isMakrukCountingDraw(st->makrukCounting))
       return true;
     return st->repetition&&st->repetition<ply;
   }

@@ -8,13 +8,15 @@
 #include "search.h"
 #include "thread.h"
 #include "uci.h"
+#include "makruk/makruk_counting.h"
+#include "makruk/makruk_eval.h"
 using namespace std;
 
 namespace Nebula{
   extern vector<string> setupBench();
 
   namespace{
-    auto startFen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    auto startFen="rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1";
 
     void position(Position& pos, istringstream& is, StateListPtr& states){
       Move m;
@@ -125,6 +127,13 @@ namespace Nebula{
       else if (token=="ucinewgame") Search::clear();
       else if (token=="isready") async()<<"readyok"<<std::endl;
       else if (token=="bench") bench(pos,states);
+      else if (token=="makrukcount"){
+        MakrukCountingState cs;
+        cout<<makrukCountingReport(pos,cs,MakrukCountingMode::Fairy)<<flush;
+      }
+      else if (token=="makrukeval"){
+        cout<<makrukEvalReport(pos)<<flush;
+      }
       else if (token=="perft"){
         int d=1;
         is>>d;
@@ -159,7 +168,7 @@ namespace Nebula{
       to=makeSquare(to>from?FILE_G:FILE_C,rankOf(from));
     string move=square(from)+square(to);
     if (typeOf(m)==PROMOTION)
-      move+=" pnbrqk"[promotionType(m)];
+      move+=" pnsrmk"[promotionType(m)];
     return move;
   }
 

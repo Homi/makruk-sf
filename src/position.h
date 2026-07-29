@@ -5,6 +5,7 @@
 #include "bitboard.h"
 #include "types.h"
 #include "nnue/nnue_accumulator.h"
+#include "makruk/makruk_counting.h"
 
 namespace Nebula{
   struct StateInfo{
@@ -14,6 +15,7 @@ namespace Nebula{
     int rule50;
     int pliesFromNull;
     Square epSquare;
+    MakrukCountingState makrukCounting; // copied by doMove memcpy (lives before 'key')
     uint64_t key;
     uint64_t checkersBB;
     StateInfo* previous;
