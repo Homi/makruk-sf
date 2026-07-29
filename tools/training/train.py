@@ -38,10 +38,12 @@ except ImportError:
     print('ERROR: PyTorch not installed.  Run: pip install torch', file=sys.stderr)
     sys.exit(1)
 
-from makruk_utils import WHITE, MakrukBoard, get_active_features, NNUE_DIMS
+from makruk_utils import WHITE, MakrukBoard, get_active_features, flip_fen, NNUE_DIMS
 
-# Network sizes
-L1, L2, L3 = 256, 32, 32
+# Network sizes — change L1 here to scale the feature transformer.
+# L1=256 (v1–v5): small, no NPS gain from int16 at this size.
+# L1=512 (v6+):   double capacity; int16 accumulation becomes meaningful.
+L1, L2, L3 = 512, 32, 32
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
@@ -52,16 +54,37 @@ def _cp_to_prob(cp: float) -> float:
 
 
 class MakrukDataset(Dataset):
-    def __init__(self, path: str, lam: float = 0.5) -> None:
+    def __init__(self, path: str, lam: float = 0.5, color_augment: bool = False,
+                 score_scale: float = 1.0) -> None:
         self.lam = lam
+        self.score_scale = score_scale
         self.data: list[tuple] = []
         with open(path, newline='') as f:
             for row in csv.DictReader(f, delimiter='\t'):
-                self.data.append((
-                    row['fen'],
-                    int(row['score_cp']),
-                    float(row['wdl']),
-                ))
+                sc  = int(row['score_cp'])
+                wdl = float(row['wdl'])
+                self.data.append((row['fen'], sc, wdl))
+                if color_augment:
+                    # Add the color-flipped position: negate score, invert WDL.
+                    self.data.append((flip_fen(row['fen']), -sc, 1.0 - wdl))
+
+    def sample_weights(self, score_boost: float) -> list[float]:
+        """Return per-sample weights for WeightedRandomSampler.
+
+        |score| < 100cp  → weight 1.0 (near-equal positions)
+        |score| 100-500  → weight 2.0
+        |score| > 500    → weight score_boost (underrepresented high-signal positions)
+        """
+        weights = []
+        for _, sc, _ in self.data:
+            a = abs(sc)
+            if a >= 500:
+                weights.append(score_boost)
+            elif a >= 100:
+                weights.append(2.0)
+            else:
+                weights.append(1.0)
+        return weights
 
     def __len__(self) -> int:
         return len(self.data)
@@ -81,7 +104,7 @@ class MakrukDataset(Dataset):
             score_stm = -score_white
             wdl_stm   = 1.0 - wdl_white
 
-        target = self.lam * _cp_to_prob(score_stm) + (1.0 - self.lam) * wdl_stm
+        target = self.lam * _cp_to_prob(score_stm * self.score_scale) + (1.0 - self.lam) * wdl_stm
         return stm_feats, opp_feats, float(target)
 
 
@@ -127,9 +150,10 @@ def train(args) -> None:
     print(f'Device   : {device}')
     print(f'Dims     : {NNUE_DIMS}   FT→{L1}  L2→{L2}  L3→{L3}→1')
 
-    dataset = MakrukDataset(args.input, lam=args.lam)
+    dataset = MakrukDataset(args.input, lam=args.lam, color_augment=args.color_augment,
+                            score_scale=args.score_scale)
     n = len(dataset)
-    print(f'Samples  : {n}')
+    print(f'Samples  : {n}{"  (×2 color-augmented)" if args.color_augment else ""}')
     if n == 0:
         print('ERROR: empty dataset', file=sys.stderr)
         sys.exit(1)
@@ -141,8 +165,20 @@ def train(args) -> None:
         generator=torch.Generator().manual_seed(42),
     )
 
-    train_dl = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                          collate_fn=_collate, num_workers=0)
+    if args.score_boost > 1.0:
+        all_weights = dataset.sample_weights(args.score_boost)
+        train_indices = train_ds.indices  # type: ignore[attr-defined]
+        train_weights = torch.tensor([all_weights[i] for i in train_indices], dtype=torch.float64)
+        sampler = torch.utils.data.WeightedRandomSampler(
+            train_weights, num_samples=train_n, replacement=True,
+        )
+        high = sum(1 for w in train_weights.tolist() if w >= args.score_boost)
+        print(f'ScoreBoost: {args.score_boost}x  high-score positions: {high}/{train_n}')
+        train_dl = DataLoader(train_ds, batch_size=args.batch_size, sampler=sampler,
+                              collate_fn=_collate, num_workers=0)
+    else:
+        train_dl = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
+                              collate_fn=_collate, num_workers=0)
     val_dl   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False,
                           collate_fn=_collate, num_workers=0)
 
@@ -150,8 +186,26 @@ def train(args) -> None:
     opt     = torch.optim.Adam(model.parameters(), lr=args.lr)
     loss_fn = nn.BCELoss()
 
+    resume_path = Path(args.output).with_name(Path(args.output).stem + '_resume.pt')
     best_val = float('inf')
-    for epoch in range(1, args.epochs + 1):
+    start_epoch = 1
+    if args.resume:
+        if resume_path.exists():
+            ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+            model.load_state_dict(ckpt['model_state'])
+            opt.load_state_dict(ckpt['optimizer_state'])
+            best_val = ckpt['best_val']
+            start_epoch = ckpt['epoch'] + 1
+            print(f'Resuming : {resume_path}  (epoch {ckpt["epoch"]} done, '
+                  f'best_val={best_val:.6f}) -> continuing from epoch {start_epoch}')
+        else:
+            print(f'Resume   : requested but no checkpoint found at {resume_path} '
+                  f'-- starting fresh')
+    if start_epoch > args.epochs:
+        print(f'Nothing to do: resume epoch {start_epoch} > target epochs {args.epochs}')
+        return
+
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         train_loss = 0.0
         for stm, opp, tgt in train_dl:
@@ -184,8 +238,21 @@ def train(args) -> None:
                 'arch': {'dims': NNUE_DIMS, 'l1': L1, 'l2': L2, 'l3': L3},
             }, args.output)
 
+        # Resume checkpoint: written every epoch (not just improvements) so an
+        # interruption never loses more than one epoch of progress. Separate from
+        # the best-val checkpoint above, which export_int16.py etc. consume.
+        torch.save({
+            'epoch': epoch,
+            'model_state': model.state_dict(),
+            'optimizer_state': opt.state_dict(),
+            'best_val': best_val,
+        }, resume_path)
+
     print(f'Best val : {best_val:.6f}')
     print(f'Saved    : {args.output}')
+    if resume_path.exists():
+        resume_path.unlink()
+        print(f'Removed  : {resume_path} (training completed normally)')
 
 
 def main() -> None:
@@ -197,12 +264,22 @@ def main() -> None:
                     help='train.tsv from convert.py')
     ap.add_argument('--output',     default='makruk.pt',
                     help='Output PyTorch checkpoint (.pt)')
+    ap.add_argument('--resume',     action='store_true',
+                    help='Resume from <output-stem>_resume.pt if present (model + optimizer '
+                         'state + epoch, written every epoch). Starts fresh if not found.')
     ap.add_argument('--epochs',     type=int,   default=20)
     ap.add_argument('--batch-size', type=int,   default=256)
     ap.add_argument('--lr',         type=float, default=1e-3,
                     help='Adam learning rate')
     ap.add_argument('--lam',        type=float, default=0.5,
                     help='Score weight in target: 1.0=score-only, 0.0=result-only')
+    ap.add_argument('--score-boost', type=float, default=1.0,
+                    help='Oversample |score|>500cp positions by this factor (e.g. 10.0)')
+    ap.add_argument('--color-augment', action='store_true',
+                    help='Double the dataset by adding color-flipped positions (fixes White-bias)')
+    ap.add_argument('--score-scale', type=float, default=1.0,
+                    help='Multiply teacher labels by this factor before sigmoid (e.g. 1.82 to '
+                         'align Fairy-SF cp scale with classical eval)')
     args = ap.parse_args()
     train(args)
 
