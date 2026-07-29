@@ -72,7 +72,8 @@ def convert(in_path: Path, out_path: Path,
             moves  = rec.get('moves', [])
             scores = rec.get('scores', [])
             wdl    = _result_wdl(result)
-            board  = MakrukBoard(rec['start_fen'])
+            board  = MakrukBoard(rec.get('start_fen',
+                           'rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1'))
 
             for ply, move in enumerate(moves):
                 if ply > max_ply:
