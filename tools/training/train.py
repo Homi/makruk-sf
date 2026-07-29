@@ -186,8 +186,26 @@ def train(args) -> None:
     opt     = torch.optim.Adam(model.parameters(), lr=args.lr)
     loss_fn = nn.BCELoss()
 
+    resume_path = Path(args.output).with_name(Path(args.output).stem + '_resume.pt')
     best_val = float('inf')
-    for epoch in range(1, args.epochs + 1):
+    start_epoch = 1
+    if args.resume:
+        if resume_path.exists():
+            ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+            model.load_state_dict(ckpt['model_state'])
+            opt.load_state_dict(ckpt['optimizer_state'])
+            best_val = ckpt['best_val']
+            start_epoch = ckpt['epoch'] + 1
+            print(f'Resuming : {resume_path}  (epoch {ckpt["epoch"]} done, '
+                  f'best_val={best_val:.6f}) -> continuing from epoch {start_epoch}')
+        else:
+            print(f'Resume   : requested but no checkpoint found at {resume_path} '
+                  f'-- starting fresh')
+    if start_epoch > args.epochs:
+        print(f'Nothing to do: resume epoch {start_epoch} > target epochs {args.epochs}')
+        return
+
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         train_loss = 0.0
         for stm, opp, tgt in train_dl:
@@ -220,8 +238,21 @@ def train(args) -> None:
                 'arch': {'dims': NNUE_DIMS, 'l1': L1, 'l2': L2, 'l3': L3},
             }, args.output)
 
+        # Resume checkpoint: written every epoch (not just improvements) so an
+        # interruption never loses more than one epoch of progress. Separate from
+        # the best-val checkpoint above, which export_int16.py etc. consume.
+        torch.save({
+            'epoch': epoch,
+            'model_state': model.state_dict(),
+            'optimizer_state': opt.state_dict(),
+            'best_val': best_val,
+        }, resume_path)
+
     print(f'Best val : {best_val:.6f}')
     print(f'Saved    : {args.output}')
+    if resume_path.exists():
+        resume_path.unlink()
+        print(f'Removed  : {resume_path} (training completed normally)')
 
 
 def main() -> None:
@@ -233,6 +264,9 @@ def main() -> None:
                     help='train.tsv from convert.py')
     ap.add_argument('--output',     default='makruk.pt',
                     help='Output PyTorch checkpoint (.pt)')
+    ap.add_argument('--resume',     action='store_true',
+                    help='Resume from <output-stem>_resume.pt if present (model + optimizer '
+                         'state + epoch, written every epoch). Starts fresh if not found.')
     ap.add_argument('--epochs',     type=int,   default=20)
     ap.add_argument('--batch-size', type=int,   default=256)
     ap.add_argument('--lr',         type=float, default=1e-3,
