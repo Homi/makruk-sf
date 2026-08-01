@@ -2200,5 +2200,71 @@ the cost of another ~8h run. Not scheduled.
 
 * `src/2020277415.bin` — Round 14 net, Elo +173 (N=100) — **currently embedded, unchanged**
 * `tools/training/makruk_round15.pt` — Round 15 checkpoint (CRC32=2931901999 when
-  exported), val_loss 0.550411, Elo +127 (N=100) regression, not deployed, gitignored but
-  kept on disk for a possible future investigation
+  exported), val_loss 0.550411, Elo +127 (N=100 seed=99) / +173 (N=100 seed=4242) —
+  see follow-up below, gitignored, kept on disk
+
+## Round 15 Follow-up — Seed-Variance Investigation (2026-08-01)
+
+### Motivation
+
+User asked directly why Round 15 regressed: wrong theory, implementation bug, or wrong
+handicap choice? Rather than speculate further on the two hypotheses above, re-tested
+empirically: is the +127 result itself stable, or could it be gauntlet-testing noise at
+a single seed?
+
+### Data check (cheap, done first)
+
+Compared raw score-distribution statistics of Round 13/14/15's new labeled data
+(mean/median/std, White/Black/near-equal split) — all three rounds are statistically
+indistinguishable. Rules out "qualitatively bad data" as a cause.
+
+### Training-curve check
+
+Re-examined the `--resume` transition point in the training log (epoch 54, saved
+best_val=0.550533 → epoch 55, val=0.550613): a ~0.00008 wobble, the same magnitude as
+ordinary epoch-to-epoch noise seen throughout the rest of the run (e.g. epoch 30 vs 25).
+No visible discontinuity from the resume itself.
+
+### Seed-stability re-test — the actual answer
+
+Re-ran the standard baseline gauntlet for **both** Round 14 and Round 15's nets at a
+second seed (4242), alongside the original seed=99 results:
+
+| Net | seed=99 | seed=4242 |
+| --- | ------- | --------- |
+| Round 14 | +173 | +191 |
+| Round 15 | **+127** | **+173** |
+
+Round 15's seed=4242 result (+173) exactly matches Round 14's *original* seed=99 result —
+Round 15 is not a broken/damaged net, it's a genuinely strong one. But **Round 14 won at
+both seeds tested** (173>127, 191>173), just by very different margins (46 Elo vs 18 Elo).
+
+### Conclusion
+
+Neither "wrong theory," "implementation bug," nor "wrong depth choice" — the dominant
+factor was **single-seed N=100 testing noise being larger than this project had
+previously characterized**. Earlier sessions estimated the noise band at ~13 Elo (from
+Round 11's N=50→N=100 discrepancy and a same-config Fairy-SF-both-versions re-run). This
+investigation found a **46 Elo swing from a seed change alone on the same net** — over 3×
+that estimate.
+
+The *direction* of the Round 15 regression appears real (Round 14 ahead at both seeds),
+but the originally reported *magnitude* (46 Elo) was substantially inflated by seed
+noise; a more defensible estimate is a real gap in the roughly 15-35 Elo range, not
+confidently pinned down further without more seeds.
+
+**Broader methodological implication, flagged for future rounds**: several earlier
+round-to-round deltas in this project (Round 13 vs 11: +4 Elo; Round 14 vs 13: +5 Elo)
+are now known to be *smaller* than a demonstrated single-seed noise swing (46 Elo) and
+should be treated as unconfirmed directionally, not just "small but real" as previously
+assumed. Only the largest deltas (Round 12's regression, and Round 15's regression in
+direction if not magnitude) are likely to survive multi-seed scrutiny. **Recommendation
+for future rounds**: test at 2+ seeds (not just seed=99) before concluding a round
+improved or regressed, especially when the delta is under ~40-50 Elo.
+
+### Decision: unchanged
+
+Round 14 remains deployed — it won both head-to-head seed comparisons against Round 15,
+so the decision not to deploy Round 15 stands, but the write-up above supersedes the
+original "clear regression, well outside noise" characterization from the initial Round
+15 section.
