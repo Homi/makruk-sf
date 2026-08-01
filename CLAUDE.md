@@ -2111,3 +2111,94 @@ untracked/archived. Full 29-test suite and perft depth 5 verified clean. Commit 
 * `src/2020277415.bin` — Round 14 net int16 MKN2, epoch 60, val_loss=0.545413, **Elo +173
   (N=100) — currently embedded**
 * `src/2605356533.bin` — Round 13 net, Elo +168 (N=100), archived (untracked)
+
+## Round 15 — Regression: Not Deployed, First `--resume`-Interrupted Run (2026-08-01)
+
+### Motivation
+
+Continued the same validated recipe as Rounds 13→14: 300 new games at the two
+validated-good configs only (`movetime-a=200 depth-b=4`, `movetime-a=150 depth-b=3`),
+combined with the Round 14 base, retrained. Three consecutive prior rounds (13, 14) had
+held or improved via this exact method.
+
+### Data generation and training
+
+* 300 new games: 150 at `depth-b=4` (seed=8001, 61.3% draws) + 150 at `movetime-a=150`
+  (seed=8002, 59.3% draws) — both healthy, consistent with prior rounds at these configs
+* 21,995 positions teacher-labeled; filtered to blend range: **13,477 accepted (87%)** —
+  even higher than the usual ~84-85%, no red flag there
+* Combined with Round 14 base (237,801) → **251,278 total positions**. Black-win
+  representation continued improving (8.4%, vs Round 14's 7.8%), duplication low (0.3%)
+* Training was **interrupted by a real reboot** at epoch 54/60 (checkpoint safely saved
+  via `--resume`, the feature added specifically for this scenario after Round 13's
+  reboot troubles) and successfully resumed from epoch 55 after the machine came back —
+  this is the **first round where `--resume` was exercised against an actual
+  interruption**, not just smoke-tested. The resume mechanics themselves worked exactly
+  as designed (correct epoch continuation, correct `best_val` carried through, correct
+  cleanup on completion).
+* Final: best epoch 60, val_loss **0.550411** — notably *higher* (worse) than Round 14's
+  0.545413. Unlike Round 13 (lower val_loss, better Elo), this round's val_loss and Elo
+  moved in the same (bad) direction.
+
+### Gauntlet result — REGRESSION
+
+N=100 standard baseline (seed=99, Fairy-SF-NNUE depth=3, adj 500cp/5, movetime-a=200ms):
+
+* **Round 15 net: 39W 57D 4L → Elo +127**
+* Round 14 net (current baseline): 47W 52D 1L → Elo +173
+* **−46 Elo** — a clear regression, well outside this project's established noise band
+  (the largest *confirmed-real* delta between adjacent successful rounds has been ~13
+  Elo; even the largest observed same-config re-run variance, from the "test vs both
+  Fairy-SF versions" session, was ~13 Elo). One stalemate termination appeared in this
+  gauntlet (`termination: ... stalemate=1`) — the first in a long time; likely noise
+  given N=1, not investigated further.
+
+### Decision: NOT deployed
+
+Reverted immediately: `src/evaluate.h` restored to `2020277415.bin` (Round 14 net),
+rebuilt, full 29-test suite reverified clean. No `build_tests.sh` side-effect this run
+(confirms the Round 14 `net/` cleanup fix continues to hold).
+
+### Root cause — NOT investigated, two unconfirmed hypotheses
+
+Unlike Round 13 (where the cause was isolated via ablation), Round 15's regression has
+**no confirmed explanation**. Two candidate hypotheses, neither tested:
+
+1. **Same-configs data can still occasionally regress** — Round 14 itself was only a
+   modest, likely-within-noise +5 Elo improvement over Round 13. It's possible the
+   "validated-good" configs don't guarantee monotonic improvement forever, and this is
+   simply an unlucky draw of games/training initialization at the current data scale
+   (~250K positions, where a single new ~13K-position increment is a smaller relative
+   share than in earlier rounds).
+2. **First real `--resume` interruption as a confound** — the Adam optimizer state
+   (momentum estimates) was correctly saved and restored, but the `DataLoader`/sampler's
+   RNG state was *not* part of the resume checkpoint, so the shuffling/sampling order for
+   epochs 55-60 after resuming differs from what an uninterrupted run would have produced.
+   This is a genuinely new variable this round (Round 13 was also interrupted, but at that
+   time restarted fully from epoch 0 each attempt, before `--resume` existed) and has never
+   been tested for effect on final Elo. **Not confirmed** — val_loss was still improving
+   smoothly through the resume with no visible discontinuity (0.550533 at epoch 54 →
+   0.550411 at epoch 60), which argues against a dramatic effect, but a subtler one
+   affecting final generalization can't be ruled out from this alone.
+
+Neither hypothesis has been tested. An ablation analogous to Round 13's (e.g., retrain
+this exact dataset from scratch, uninterrupted, and compare) would distinguish them, at
+the cost of another ~8h run. Not scheduled.
+
+### Full Benchmark Progression (N=100, seed=99, Fairy-SF-NNUE depth=3, adj 500cp/5)
+
+| Config | Result | Elo | Notes |
+| ------ | ------ | --- | ----- |
+| Round 14 net (currently embedded) | 47W 52D 1L | **+173** | best result |
+| Round 13 net | 45W 55D 0L | +168 | |
+| Round 11 net | 46W 52D 2L | +164 | |
+| v7 net | 44W 53D 3L | +151 | |
+| Round 15 net | 39W 57D 4L | +127 | regression, not deployed |
+| Round 12 net | 35W 61D 4L | +111 | regression (Config B included), not deployed |
+
+### Net Archive — Round 15
+
+* `src/2020277415.bin` — Round 14 net, Elo +173 (N=100) — **currently embedded, unchanged**
+* `tools/training/makruk_round15.pt` — Round 15 checkpoint (CRC32=2931901999 when
+  exported), val_loss 0.550411, Elo +127 (N=100) regression, not deployed, gitignored but
+  kept on disk for a possible future investigation
