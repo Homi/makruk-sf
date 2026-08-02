@@ -2268,3 +2268,144 @@ Round 14 remains deployed — it won both head-to-head seed comparisons against 
 so the decision not to deploy Round 15 stands, but the write-up above supersedes the
 original "clear regression, well outside noise" characterization from the initial Round
 15 section.
+
+## Round 15 Follow-up — Opening Book + Paired-Game Support (2026-08-01)
+
+### Motivation
+
+The seed-noise investigation above demonstrated a 46 Elo swing from a seed change alone
+on the identical net — over 3x the ~13 Elo noise band this project had previously
+assumed. Root cause: `gauntlet.py`'s only opening randomization was a small MultiPV-based
+pool sampled fresh per game, with no game-pairing (the same random opening was never
+guaranteed to be played twice with colors swapped), unlike Stockfish's own fishtest
+methodology (large curated opening books, thousands of positions, PAIRED games). This
+made single-seed N=100 gauntlets an unreliable basis for the small round-to-round deltas
+this project had been deploying on.
+
+### Opening book sourced
+
+Researched popular Makruk opening theory online; rather than hand-curating a small set,
+found and adopted the [fairy-stockfish/books](https://github.com/fairy-stockfish/books)
+repository (GPLv3) — 66,745 Makruk positions per file, machine-generated via
+[fairy-stockfish/bookgen](https://github.com/fairy-stockfish/bookgen) (perft/multipv
+search with balance filtering), far more diverse than anything practical to hand-curate.
+Downloaded verbatim into `tools/books/makruk.epd` and `tools/books/makruk_no_counting.epd`
+with attribution in `tools/books/README.md`. Verified FEN-format compatibility directly
+against the engine's own parser (`makrukeval` UCI command gives identical scores on the
+same position from either source).
+
+### `gauntlet.py` changes
+
+* `load_book(path)` — parses EPD/FEN book files (first 6 whitespace-separated fields as
+  FEN; blank lines and `#`-comments skipped).
+* `Engine.search()`, `Engine.search_multipv()`, `play_game()` all gained a `start_fen`
+  parameter (default: Makruk start FEN), threaded through to the `position fen ...` UCI
+  command and recorded in each game's JSONL record.
+* `--book PATH` CLI flag, mutually exclusive with `--opening-plies` (enforced with an
+  explicit error — a book position already sets the opening; further per-ply
+  randomization on top of it would break the pairing invariant below).
+* **Paired-game logic** in the main loop: a new book position is drawn via
+  `rng.choice(book_fens)` only at the start of each pair (odd `gid`, when `a_is_white`
+  flips true); the even `gid` (second half of the pair) reuses that same `pair_fen` with
+  colors swapped (`a_is_white` already alternates every game). This is the standard
+  fishtest-style paired-game structure: any positional bias in a given opening is played
+  out by both engines from both colors, canceling out in the aggregate score instead of
+  contributing seed-dependent noise.
+
+### Verification
+
+Smoke-tested both code paths (6 book games, 2 non-book games) against
+Fairy-Stockfish-NNUE:
+
+* Confirmed pairing invariant directly from JSONL output: games 1-2, 3-4, 5-6 each shared
+  an identical `start_fen` with `a_is_white` flipped, drawn from three distinct book
+  positions.
+* Confirmed the `--opening-plies` (non-book) path is unchanged and still functions.
+* Confirmed the `--book` + `--opening-plies` mutual-exclusion guard fires correctly.
+
+### Status
+
+Implemented and verified; not yet used for a full-scale round decision. **Next round**
+should re-run the Round 14 vs Round 15 comparison (and ideally a fresh Round 16 data/train
+cycle) using `--book tools/books/makruk_no_counting.epd` instead of `--opening-plies`, to
+establish whether book-paired gauntlets meaningfully shrink the noise band demonstrated
+above. `makruk_no_counting.epd` (not `makruk.epd`) is the appropriate default for gauntlet
+opponent testing since our engine's own counting-draw logic should decide draws, not an
+EPD field baked in from the book generator.
+
+## Round 16 — First Book-Paired Round: Inconclusive, Not Deployed (2026-08-02)
+
+### Method
+
+Identical recipe to Round 14 (150 games at `movetime-a=200 depth-b=4` + 150 at
+`movetime-a=150 depth-b=3`, seeds 11001/11002, teacher-labeled at depth=10, filtered to
+blend range, combined with the Round 14 base), but using `--book
+tools/books/makruk_no_counting.epd` instead of `--opening-plies` for **both** data
+generation and the final evaluation gauntlet — the first round to use the new book-paired
+methodology end to end. Driver: `tools/training/round16_pipeline.sh`.
+
+Blend-range acceptance and data volume were consistent with prior rounds (no anomalies).
+Training: epochs=60, lam=0.7, score-boost=2.0, color-augment, L1=512, `--resume` enabled.
+Best epoch 59, val_loss **0.547813** — better than Round 14's 0.545413, though this
+project's history (Round 9 onward) has repeatedly shown val_loss does not predict Elo.
+Export: `src/150547052.bin` (22.6 MB, int16 MKN2).
+
+A real machine reboot interrupted the pipeline mid-compile during the binary-build stage
+(after data-gen, teacher-labeling, and training had already finished cleanly). Recovered
+via a full `make clean` + rebuild of both comparison binaries (to rule out a truncated
+`.o` file from the interrupt) rather than trust the incremental build state; all 29 tests
+passed on the rebuilt binaries before evaluation proceeded. The deploy step was
+deliberately never run automatically by the pipeline script — `src/evaluate.h` stayed
+pinned to the Round 14 net throughout data-gen/training/build, so the interrupted run
+left the repo in its already-committed state with nothing to revert.
+
+### Evaluation — book-paired, 2 seeds, N=100 each (first real test of the new method)
+
+| Net | seed=99 | seed=4242 | spread |
+| --- | ------- | --------- | ------ |
+| Round 14 (current baseline) | +241 | +230 | **11 Elo** |
+| Round 16 (new net) | +186 | +263 | **77 Elo** |
+
+Head-to-head delta (Round16 − Round14, same opponent/settings/paired openings per seed):
+seed=99: **−55 Elo** (Round 14 ahead); seed=4242: **+33 Elo** (Round 16 ahead). The two
+seeds disagree on direction; averaged, −11 Elo (Round 14 slightly ahead), well inside the
+spread either net showed on its own.
+
+All four runs terminated cleanly (0 crashes, no stalemates, adjudication/draw_score
+dominant as expected) — the disagreement is not an artifact of a broken run.
+
+### Interpretation: partial validation of the book-pairing fix, plus a new noise source
+
+Round 14's own seed-to-seed spread shrank from the previously-demonstrated **46 Elo**
+(under the old unpaired `--opening-plies` method, Round 15 follow-up) to **11 Elo** under
+book-pairing at these same two seeds — meaningful evidence the pairing fix is working as
+intended for a net whose true strength is stable across openings.
+
+Round 16 did **not** show the same improvement (77 Elo spread) — larger than the old
+noise band, not smaller. Because paired openings use the *same* book position played by
+both colors, they cancel color/first-move bias, but they don't cancel a different noise
+source: **sampling variance from a finite draw of distinct book positions** (100 games =
+50 distinct pairs, drawn randomly from 66,745). If a net's strength is more
+position-dependent (does noticeably better or worse depending on which openings happen to
+get sampled), pairing alone doesn't fix that — only a larger N or more positions would.
+Round 16's own net may simply be less positionally robust than Round 14's, or this may be
+an artifact of only two seeds — **not distinguished by this test**, would need a third
+seed or larger N to tell apart.
+
+### Decision: NOT deployed
+
+The evidence is genuinely mixed (opposite-signed deltas at the two seeds, average delta
+smaller than either individual spread) — not a confirmed improvement, and if anything
+very weakly negative. Per this project's established practice, an inconclusive result is
+not deployed. `src/evaluate.h` was never changed from Round 14
+(`2020277415.bin`) — no revert was needed. Round 16 net (`src/150547052.bin`) and its
+checkpoint (`tools/training/makruk_round16.pt`) are kept on disk, untracked, for possible
+future reference (e.g. as one of multiple sources in a later ablation, following the
+Round 13 precedent). Comparison binaries (`src/sf-kernel-round14`,
+`src/sf-kernel-round16`) deleted as scratch cleanup.
+
+### Net Archive — Round 16
+
+* `src/2020277415.bin` — Round 14 net, **currently embedded, unchanged**
+* `src/150547052.bin` — Round 16 net int16 MKN2, epoch 59, val_loss=0.547813, inconclusive
+  vs Round 14 (avg −11 Elo, high seed variance), not deployed, untracked
