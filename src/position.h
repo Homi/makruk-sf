@@ -5,6 +5,7 @@
 #include "bitboard.h"
 #include "types.h"
 #include "nnue/nnue_accumulator.h"
+#include "nnue/mknn_accumulator.h"
 #include "makruk/makruk_counting.h"
 
 namespace Nebula{
@@ -26,7 +27,17 @@ namespace Nebula{
     int repetition;
     Eval::Nnue::Accumulator accumulator;
     DirtyPiece dirtyPiece;
+    // Must stay the LAST member: doNullMove's partial memcpy copies everything up
+    // to (not including) 'accumulator', and doMove's copies up to (not including)
+    // 'key' -- this field must live outside both ranges so it is always explicitly
+    // reset (see doMove/doNullMove/setState in position.cpp), never stale-copied.
+    Eval::Nnue::MknnAccumulator mknnAcc;
   };
+
+  static_assert(sizeof(StateInfo) <= 16384,
+    "StateInfo grew unexpectedly large -- this roughly doubles per-node search "
+    "stack usage on a code path with unresolved SIGSEGV history (see CLAUDE.md "
+    "'Round 10'/'Round 17'); re-check before increasing further.");
 
   using StateListPtr = std::unique_ptr<std::deque<StateInfo>>;
   class Thread;

@@ -2505,3 +2505,144 @@ to drive a real fix.
   committed for reuse if another attempt is warranted later
 * `tools/gauntlet_out/round17_repro/` — raw logs/PGN/JSONL from the 150-game reproduction
   attempt (gitignored, kept on disk for reference)
+
+## Round 18 — True-Strength Baseline + Incremental NNUE Accumulator (2026-08-22)
+
+### Part 1: the first true equal-condition baseline
+
+Every Elo number in this project's history through Round 17 (+111 to +382) was measured
+under a **handicap favoring sf-kernel** (opponent capped at a lower depth or movetime).
+Asked to establish a real baseline for setting future targets, ran the first **equal-condition**
+gauntlet: 200 games, book-paired, 200ms movetime for **both** sides, vs Fairy-Stockfish-NNUE,
+current net (`2020277415.bin`, Round 14).
+
+**Result: 0W 42D 158L → Elo −372.** A stark, clean result (0 crashes, healthy termination
+breakdown) — sf-kernel is dramatically weaker than a mature reference engine at matched
+conditions. This reframes every prior handicap-gauntlet Elo number in this project as *not*
+representative of true strength; they measured performance under a favorable handicap, not
+real playing strength.
+
+### Part 2: root-causing the gap — NNUE evaluation, not net size
+
+Asked to analyze whether increasing NNUE net size (`L1`) could help close the gap. Live
+profiling instead found the real bottleneck: our engine's nps collapses from **~1.75M to
+~38-41K (45x slower)** whenever NNUE evaluation fires (i.e. on most near-equal positions —
+`evaluate.cpp`'s NNUE gate is `|classical| < 300`). Root cause: `MknnEvaluator::evaluate()`
+(`src/nnue/mknn_evaluator.cpp`) recomputed its entire feature-transformer (FT) accumulator
+**from scratch on every single call** — full board rescan + full accumulation — instead of
+incrementally updating a cached accumulator per move, defeating the entire point of
+"Efficiently Updatable" NNUE. Increasing `L1` at that point would have made per-call cost
+*worse*, not better.
+
+Two Explore agents then found the complete infrastructure for a correct incremental
+implementation already present as **dead, unused legacy Stockfish NNUE code**:
+`StateInfo::accumulator` (unused legacy field, wrong shape for MKN2), `DirtyPiece` (already
+correctly populated by every Makruk move type in `doMove`), and — critically —
+`HalfKAv2Makruk::appendChangedIndices`/`requiresRefresh`/`updateCost`/`refreshCost`
+(`src/nnue/features/half_ka_v2_makruk.{h,cpp}`), which implement the exact incremental-update
+API needed but were never wired into `MknnEvaluator`. A Plan agent (opus) then produced a
+verified implementation design, catching a subtle bug before any code was written: `doNullMove`'s
+partial `memcpy` in `position.cpp` copies further into `StateInfo` than `doMove`'s does (up to
+`accumulator`, not just `key`), so a naive "place the new field after `key`" placement (the
+precedent from the SIGSEGV-hardening `dirtyPiece` placement) would have been stale-copied.
+
+### Implementation
+
+New files: `src/nnue/mknn_accumulator.h` (`MknnAccumulator`: `int32_t acc[2][512]` +
+`computed[2]`, riding the existing `StateInfo`/`doMove`/`undoMove` chain exactly like
+`DirtyPiece` already does — zero new thread-safety work needed, confirmed by construction).
+`mknnAcc` is the **last** member of `StateInfo` (`position.h`), outside both `doMove`'s and
+`doNullMove`'s partial-memcpy ranges. `MknnEvaluator::updateAccumulator()`
+(`mknn_evaluator.cpp`) ports the legacy `FeatureTransformer::updateAccumulator` algorithm
+(`nnue_feature_transformer.h:232-345`) onto int32/MKN2: walks `StateInfo::previous` backwards
+under a cost budget for the nearest ancestor with a valid cached accumulator (stopping early
+if `requiresRefresh` — our king moved — fires), then replays the diff forward hop-by-hop via
+`appendChangedIndices`, or falls back to a full rebuild if no usable ancestor was found.
+Implements the **general multi-hop case**, not just 1-hop — justified because `evaluate()`'s
+NNUE gate (`|classical| < 300`), in-check skips, and TT-cached-eval skips all routinely punch
+multi-node gaps in the "computed" chain during real search. Scope narrowed to VERSION2 (int16
+MKN2, the only actively-deployed format since Round 6) — VERSION1 and any net with `L1 > 512`
+keep the original always-full-refresh path unconditionally, unchanged.
+
+`sizeof(StateInfo)` grew 4544 → 8704 bytes; added a `static_assert(<= 16384)` tripwire given
+the unresolved SIGSEGV history on this exact code path (Round 10/17). A `-Wclass-memaccess`
+warning appeared on the existing `memset`/`memcpy` calls in `position.cpp` (the new field's
+default member initializer makes `StateInfo` no longer a strictly "trivial" type, though it
+remains trivially-copyable and the calls stay well-defined) — silenced with scoped, documented
+`#pragma GCC diagnostic` blocks rather than removing the initializer that makes the accumulator
+cache safe-by-construction.
+
+### Correctness verification
+
+New `src/makruk/test_nnue_incremental.cpp`: loads the real embedded net and asserts the
+incremental path is **bit-exact** against a from-scratch reference rebuild (valid because
+int32 accumulation is exact/associative, no floating-point rounding) across 13 scenarios —
+quiet move, capture, promotion, capturing promotion (`dirty_num=3`, the struct's max), own
+king move, opponent king move, null move, multi-hop gaps (including one spanning a king move),
+budget exhaustion, sibling reuse, and a 500-ply fixed-seed random walk. Critical finding during
+test-writing: `build_tests.sh` compiles with `-DNDEBUG`, which **silently strips every
+`assert()`** in the entire existing test suite — this and all prior test files have been
+running with zero assertions active. The new test therefore uses explicit runtime checks
+(`std::exit(1)` on mismatch) rather than `assert()`.
+
+Result: **188/188 exactness checks bit-exact, zero failures**, across every scenario. Also
+ran under a manually-built AddressSanitizer+UBSan variant (both the crash-probe FENs and the
+new test standalone) — clean, with one informational (not a bug) UBSan note about
+`doNullMove`'s TT-prefetch touching an unresized table in this test's minimal harness (never
+happens in real play, where `main.cpp` always resizes the TT first), documented in-code rather
+than "fixed" by adding unrelated engine bring-up to the test. Separately surfaced — and
+explicitly **not** fixed, filed for a future session — a pre-existing, unrelated dormant
+assertion failure in `test_counting.cpp` that only manifests when compiled without `-DNDEBUG`
+(i.e. has silently never actually run in this project's history until this session's ASan
+build tried it). `perft 5` from the Makruk start position: unchanged at 6,223,994 nodes.
+`tools/build_verify.sh` (clean rebuild + full suite + 16-case crash probe): clean.
+`go depth 30` stack check: 132 KB `VmStk`, no risk from the doubled `StateInfo` size.
+
+### Performance: real, but far smaller than initially predicted — L2 is the actual bottleneck
+
+Added temporary timing instrumentation (removed before commit) to find out why nps barely
+moved after the fix. Diagnostic counters confirmed the algorithm works exactly as designed
+(81% of calls hit the fast 1-hop path, 17% multi-hop, only 2% full refresh) and FT accumulation
+dropped to **~3µs/call** as expected. But **L2 (`Linear(1024→32)`, unchanged by this fix) costs
+~32.6µs/call** — 5x higher than this round's own design-phase estimate of 5-7µs, and now
+overwhelmingly the dominant per-eval cost (likely an unvectorized reduction loop with a serial
+dependency chain, since the build uses no `-ffast-math`). Net nps: **~40K → ~41-45K**, a real
+but modest ~10-15% gain, not the originally-hoped 2.5-3x.
+
+### Gauntlet result — real, modest improvement
+
+Same equal-condition format as Part 1's baseline (200 games, book-paired, 200ms both sides,
+seed=99, vs Fairy-Stockfish-NNUE):
+
+* **Baseline (Round 14 net, non-incremental eval): 0W 42D 158L → Elo −372**
+* **This round (same net, incremental FT accumulator): 0W 45D 155L → Elo −359**
+
+**+13 Elo — small, real, zero regressions, zero crashes.** Consistent with the corrected (not
+the original optimistic) performance picture: FT was never as dominant a bottleneck as assumed,
+so fixing only FT recovers only a fraction of the eval-cost reduction needed to meaningfully
+narrow a 370+ Elo gap. Deployed (this is a pure code-quality and small-but-real Elo
+improvement with no downside found) — no `evaluate.h` net swap needed, since this change is
+independent of which net is embedded.
+
+### Next step: L2 is now the precisely-characterized target, not net size
+
+The original question ("would a bigger net help?") is now answerable: **no, not yet** — a
+bigger `L1` would make FT accumulation cost more per call while the actual bottleneck (L2)
+stays untouched. The concrete next-round target is now L2/L3, e.g. int8/int16 quantization of
+`l2_weight_` (currently float32, 128KB read every call) analogous to what Round 6 already did
+for FT, or restructuring the reduction loop to enable auto-vectorization. Net-size analysis
+should wait until per-call eval cost is no longer L2-dominated, so its effect can be measured
+cleanly — same reasoning this round applied to deferring it past the FT fix.
+
+### Files added/changed this round
+
+* `src/nnue/mknn_accumulator.h` *(new)* — `MknnAccumulator` struct
+* `src/nnue/mknn_evaluator.h`/`.cpp` — `incremental_` flag, `updateAccumulator`, `refreshInto`/
+  `addColumn`/`subColumn`, `evaluate()` branch; `accumulate_i16`/`accumulate_f32` untouched
+* `src/position.h` — `mknnAcc` field (last `StateInfo` member) + `static_assert`
+* `src/position.cpp` — `computed[]` resets in `doMove`/`doNullMove`/`setState`; scoped
+  `-Wclass-memaccess` suppressions with rationale comments
+* `src/thread.cpp` — `computed[]` reset after `rootState` assignment
+* `src/makruk/test_nnue_incremental.cpp` *(new)* + `build_tests.sh`/`test_runner.cpp` wiring
+* `tools/gauntlet_out/round17_baseline/`, `tools/gauntlet_out/round17_incremental/` — raw
+  gauntlet logs/JSONL for both equal-condition runs (gitignored, kept on disk)

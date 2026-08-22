@@ -6,26 +6,141 @@
 
 #include "mknn_evaluator.h"
 #include "../position.h"
+#include <cstring>
 
 namespace Nebula::Eval::Nnue {
+
+// ---------------------------------------------------------------------------
+// Incremental accumulator support (VERSION2 / int16 only, see incremental_).
+//
+// Ported from the legacy Stockfish FeatureTransformer::updateAccumulator
+// algorithm (src/nnue/nnue_feature_transformer.h) onto MknnAccumulator/
+// int32 storage. See CLAUDE.md for the design writeup.
+// ---------------------------------------------------------------------------
+
+void MknnEvaluator::refreshInto(const Nebula::Position& pos, const Color persp,
+                                 std::int32_t* dst) const {
+    using Features::HalfKAv2Makruk;
+    HalfKAv2Makruk::IndexList active;
+    HalfKAv2Makruk::appendActiveIndices(pos, persp, active);
+    for (int i = 0; i < L1_; ++i)
+        dst[i] = static_cast<std::int32_t>(ft_bias_i16_[i]);
+    for (const auto idx : active)
+        addColumn(idx, dst);
+}
+
+void MknnEvaluator::addColumn(const IndexType idx, std::int32_t* dst) const {
+    const int16_t* col = ft_weight_i16_.data() + idx * L1_;
+    for (int i = 0; i < L1_; ++i)
+        dst[i] += static_cast<std::int32_t>(col[i]);
+}
+
+void MknnEvaluator::subColumn(const IndexType idx, std::int32_t* dst) const {
+    const int16_t* col = ft_weight_i16_.data() + idx * L1_;
+    for (int i = 0; i < L1_; ++i)
+        dst[i] -= static_cast<std::int32_t>(col[i]);
+}
+
+void MknnEvaluator::updateAccumulator(const Nebula::Position& pos, const Color persp) const {
+    using Features::HalfKAv2Makruk;
+
+    StateInfo* const target = pos.state();
+    if (target->mknnAcc.computed[persp])
+        return;   // hot path: already valid, nothing to do
+
+    // Walk backwards looking for the nearest ancestor with a valid cached
+    // accumulator, recording the hops visited so they can be replayed forward.
+    // Bounded by both a cost budget (mirrors the legacy algorithm: give up if
+    // replaying would cost more than a full refresh) and a hard cap (defensive
+    // only -- the budget check makes this unreachable in practice).
+    constexpr int MaxChain = 40;
+    StateInfo* chain[MaxChain];
+    int n = 0;
+    int gain = HalfKAv2Makruk::refreshCost(pos);
+    StateInfo* st = target;
+
+    while (st->previous && !st->mknnAcc.computed[persp]) {
+        if (HalfKAv2Makruk::requiresRefresh(st, persp))          // our king moved on this hop
+            break;
+        if ((gain -= HalfKAv2Makruk::updateCost(st) + 1) < 0)     // incremental too expensive
+            break;
+        if (n >= MaxChain)
+            break;
+        chain[n++] = st;
+        st = st->previous;
+    }
+
+    std::int32_t* const dst = target->mknnAcc.acc[persp];
+
+    if (n > 0 && st->mknnAcc.computed[persp]) {
+        // Found a usable computed ancestor within budget: replay forward.
+        // requiresRefresh gated every hop above, so our king did not move
+        // anywhere in this span -- one king square is valid for all of it.
+        const Square ksq = pos.square<KING>(persp);
+        std::memcpy(dst, st->mknnAcc.acc[persp],
+                    static_cast<size_t>(L1_) * sizeof(std::int32_t));
+
+        for (int j = n - 1; j >= 0; --j) {   // oldest hop first
+            HalfKAv2Makruk::IndexList removed, added;
+            HalfKAv2Makruk::appendChangedIndices(ksq, chain[j]->dirtyPiece, persp, removed, added);
+            for (const auto idx : removed) subColumn(idx, dst);
+            for (const auto idx : added)   addColumn(idx, dst);
+
+            // Materialize the hop closest to the found ancestor too (not just
+            // the final target), so sibling nodes one ply below it become
+            // 1-hop lookups instead of re-walking this whole span again.
+            if (j == n - 1 && chain[j] != target) {
+                std::memcpy(chain[j]->mknnAcc.acc[persp], dst,
+                            static_cast<size_t>(L1_) * sizeof(std::int32_t));
+                chain[j]->mknnAcc.computed[persp] = true;
+            }
+        }
+        target->mknnAcc.computed[persp] = true;
+        return;
+    }
+
+    // No usable ancestor (root, a king-move refresh boundary, or budget
+    // exhausted): full rebuild, identical to the original always-from-scratch
+    // behaviour.
+    refreshInto(pos, persp, dst);
+    target->mknnAcc.computed[persp] = true;
+}
+
+void MknnEvaluator::accumulateFromScratch(const Nebula::Position& pos, const Color persp,
+                                           std::vector<std::int32_t>& out) const {
+    out.resize(L1_);
+    refreshInto(pos, persp, out.data());
+}
 
 Value MknnEvaluator::evaluate(const Nebula::Position& pos) const {
     using Features::HalfKAv2Makruk;
 
-    // Accumulate FT for both perspectives.
-    HalfKAv2Makruk::IndexList active_w, active_b;
-    HalfKAv2Makruk::appendActiveIndices(pos, WHITE, active_w);
-    HalfKAv2Makruk::appendActiveIndices(pos, BLACK, active_b);
-
     std::vector<float> acc_w, acc_b;
-    if (ver_ == VERSION2) {
-        // int16 FT: transposed weight layout, int32 accumulation, float output.
-        accumulate_i16(active_w, acc_w);
-        accumulate_i16(active_b, acc_b);
+
+    if (incremental_) {
+        updateAccumulator(pos, WHITE);
+        updateAccumulator(pos, BLACK);
+        const auto& a  = pos.state()->mknnAcc;
+        const float inv = 1.0f / static_cast<float>(ft_scale_);
+        acc_w.resize(L1_);
+        acc_b.resize(L1_);
+        for (int i = 0; i < L1_; ++i) {
+            acc_w[i] = static_cast<float>(a.acc[WHITE][i]) * inv;
+            acc_b[i] = static_cast<float>(a.acc[BLACK][i]) * inv;
+        }
     } else {
-        // float32 FT: non-transposed layout.
-        accumulate_f32(active_w, acc_w);
-        accumulate_f32(active_b, acc_b);
+        // VERSION1 (float32) or a VERSION2 net wider than MknnMaxL1: unchanged
+        // always-from-scratch path.
+        HalfKAv2Makruk::IndexList active_w, active_b;
+        HalfKAv2Makruk::appendActiveIndices(pos, WHITE, active_w);
+        HalfKAv2Makruk::appendActiveIndices(pos, BLACK, active_b);
+        if (ver_ == VERSION2) {
+            accumulate_i16(active_w, acc_w);
+            accumulate_i16(active_b, acc_b);
+        } else {
+            accumulate_f32(active_w, acc_w);
+            accumulate_f32(active_b, acc_b);
+        }
     }
 
     // L2 input: [acc_stm_crelu; acc_opp_crelu] — STM perspective first.

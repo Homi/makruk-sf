@@ -73,7 +73,20 @@ namespace Nebula{
     Square sq=SQ_A8;
     std::istringstream ss(fenStr);
     std::memset(this,0,sizeof(Position));
+    // StateInfo is trivially copyable (memset/memcpy remain well-defined) but no
+    // longer a "trivial type" per the strict standard definition, because
+    // MknnAccumulator's computed[2] has a default member initializer -- that
+    // NSDMI is what guarantees a fresh StateInfo always starts with a correctly
+    // false/empty accumulator cache, everywhere one is constructed, including
+    // here where memset(0) already achieves the same result byte-for-byte.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
     std::memset(si,0,sizeof(StateInfo));
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     st=si;
     ss>>std::noskipws;
     while (ss>>token&&!isspace(token)){
@@ -174,6 +187,12 @@ namespace Nebula{
   }
 
   void Position::setState(StateInfo* si) const{
+    // Defensive (Position::set() already zeroes the whole StateInfo via memset,
+    // which correctly sets computed[]=false too, but this closes the same gap
+    // shape a prior investigation flagged for the legacy accumulator field --
+    // a root StateInfo must never be treated as having a valid cached MKN
+    // accumulator).
+    si->mknnAcc.computed[WHITE]=si->mknnAcc.computed[BLACK]=false;
     si->pawnKey=Zobrist::noPawns;
     si->nonPawnMaterial[WHITE]=si->nonPawnMaterial[BLACK]=VALUE_ZERO;
     si->checkersBB=attackersTo(square<KING>(sideToMove))&pieces(~sideToMove);
@@ -384,7 +403,18 @@ namespace Nebula{
     if (thisThread)
       thisThread->nodes.fetch_add(1,std::memory_order_relaxed);
     uint64_t k=st->key^Zobrist::side;
+    // See the matching comment in Position::set(): StateInfo remains trivially
+    // copyable despite MknnAccumulator's NSDMI, so this partial memcpy (fields
+    // before 'key' only -- everything from 'key' onward, including mknnAcc, is
+    // explicitly recomputed/reset below) stays well-defined.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
     std::memcpy(&newSt,st, offsetof(StateInfo,key));
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     newSt.previous=st;
     st=&newSt;
     ++gamePly;
@@ -392,6 +422,8 @@ namespace Nebula{
     ++st->pliesFromNull;
     st->accumulator.computed[WHITE]=false;
     st->accumulator.computed[BLACK]=false;
+    st->mknnAcc.computed[WHITE]=false;
+    st->mknnAcc.computed[BLACK]=false;
     auto& dp=st->dirtyPiece;
     dp.dirty_num=1;
     const Color us=sideToMove;
@@ -541,13 +573,25 @@ namespace Nebula{
   }
 
   void Position::doNullMove(StateInfo& newSt){
+    // See the matching comment in Position::set()/doMove(). This copies further
+    // than doMove's does (through 'accumulator', not just through 'key') but
+    // mknnAcc still lives strictly after it and is explicitly reset below.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
     std::memcpy(&newSt,st, offsetof(StateInfo,accumulator));
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     newSt.previous=st;
     st=&newSt;
     st->dirtyPiece.dirty_num=0;
     st->dirtyPiece.piece[0]=NO_PIECE;
     st->accumulator.computed[WHITE]=false;
     st->accumulator.computed[BLACK]=false;
+    st->mknnAcc.computed[WHITE]=false;
+    st->mknnAcc.computed[BLACK]=false;
     if (st->epSquare!=SQ_NONE){
       st->key^=Zobrist::enpassant[fileOf(st->epSquare)];
       st->epSquare=SQ_NONE;
