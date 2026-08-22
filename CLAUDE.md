@@ -2646,3 +2646,120 @@ cleanly — same reasoning this round applied to deferring it past the FT fix.
 * `src/makruk/test_nnue_incremental.cpp` *(new)* + `build_tests.sh`/`test_runner.cpp` wiring
 * `tools/gauntlet_out/round17_baseline/`, `tools/gauntlet_out/round17_incremental/` — raw
   gauntlet logs/JSONL for both equal-condition runs (gitignored, kept on disk)
+
+## Round 19 — Upstream Diff Audit Finds a Real seeGe() Bug (2026-08-22)
+
+### Motivation
+
+Asked to check for other bugs by diffing against upstream `FireFather/sf-kernel`
+(the `upstream` remote, already configured). Upstream has not advanced since our fork point
+(`upstream/main` tip == `git merge-base main upstream/main` exactly) — nothing to pull — but
+comparing our full diff against it is a systematic way to find unintentional divergences from
+correct generic-engine logic introduced during the Makruk conversion.
+
+### Method
+
+`git diff upstream/main HEAD -- src/` shows `search.cpp`, `movepick.cpp`, `tt.cpp`,
+`timeman.cpp`, `main.cpp` are **completely unchanged** — the core search algorithm itself was
+never touched. Reviewed every file that *was* changed (`position.cpp`/`.h`, `bitboard.cpp`/`.h`,
+`movegen.h`, `evaluate.cpp`, `misc.h`, `types.h`, `uci.cpp`, `ucioption.cpp`,
+`nnue_architecture.h`, `Makefile`) hunk by hunk, cross-referencing against the correctly-adapted
+Makruk piece-movement patterns already established elsewhere in the same files
+(`attackersTo()`, `setCheckInfo()`, `sliderBlockers()`, and `movegen.h`'s piece-move generation
+all correctly handle Khon's color-dependent movement and Met's diagonal-only, non-sliding
+movement).
+
+### Bug found: `Position::seeGe()` (Static Exchange Evaluation) — two related issues
+
+`seeGe()` (`position.cpp`), used throughout `search.cpp` (SEE pruning, LMR reductions,
+futility pruning) and `movepick.cpp` (capture move ordering), never received the same
+Makruk-adaptation pass as `attackersTo()`/`setCheckInfo()`/`sliderBlockers()` in the same file.
+Its incremental "revealed attacker" updates (after removing a piece from the simulated
+exchange) used:
+
+1. `attacksBb<BISHOP>(to,occupied)&pieces(BISHOP,QUEEN)` — silently unions **both colors'**
+   Khon movement directions (White: forward+diagonals is NORTH; Black: SOUTH+diagonals) instead
+   of the reverse-color lookup (`khonAttacksBb(~attackerColor, to)`) that `attackersTo()` already
+   uses correctly. **Confirmed empirically**: a White Khon placed one square north of a test
+   square `to` (a direction only a *Black* Khon could attack `to` from) was correctly excluded
+   by `attackersTo()` but incorrectly included by this formula.
+2. `attacksBb<ROOK>(to,occupied)&pieces(ROOK,QUEEN)` — includes Met (QUEEN slot) in the
+   Rook-line slider "X-ray" check, but Met has **zero** rank/file movement (1-step diagonal
+   only) and can never be a Rook-line attacker — exactly the reasoning `sliderBlockers()`
+   already correctly applies (`pieces(ROOK)` alone, no QUEEN). **Confirmed empirically**: a Met
+   placed on the same rank as `to`, far away, was correctly excluded by `attackersTo()` but
+   incorrectly included by this formula.
+
+Both bugs are live, not dead code (unlike two similarly-shaped `EN_PASSANT`-branch instances of
+the same union pattern in `legal()`/`givesCheck()`, confirmed unreachable since `movegen.h`
+never generates an `EN_PASSANT`-typed move in this fork). Root cause: neither Khon nor Met is
+a slider, so the entire "does removing a piece reveal a new attacker" concept these lines exist
+for doesn't apply to them at all — the correct fix is a static, `occupied`-independent term, not
+a slider-style recomputation.
+
+### Fix
+
+`position.cpp`: replaced both patterns with the same reverse-color/no-slider formulas already
+verified correct in `attackersTo()` (a single `khonMetAttackers` term shared by the PAWN/BISHOP
+branches; `pieces(ROOK)` without `QUEEN` in the ROOK/QUEEN branches). Piece-check order
+(`PAWN, KNIGHT, BISHOP, ROOK, QUEEN`) deliberately left unchanged, even though it doesn't match
+Makruk's actual value ranking (Met=420 is the *second-cheapest* piece, below Khon=660 and
+Knight=781, yet checked last) — that's a separate, real issue, **not fixed this round**,
+flagged below.
+
+### Regression test: `src/makruk/test_see.cpp` (new)
+
+Following the same "fast-vs-slow-reference" methodology as `test_nnue_incremental.cpp`: a
+`referenceSeeGe()` reimplementation re-derives the attacker set from scratch via the
+already-trusted `attackersTo()` at every step (obviously correct by construction, just slow),
+cross-checked against the real `seeGe()` across every capture move, several thresholds, at
+every ply of a 300-ply fixed-seed random walk plus two hand-built direct-repro positions.
+**2165 checks, all match, on the fixed code.** Verified the test has real teeth: temporarily
+reverted the `position.cpp` fix (`git stash`) and reran — **24 real failures** appeared,
+confirming both the bug and the test's ability to catch it; restored the fix (`git stash pop`)
+and reconfirmed clean. Wired into `build_tests.sh`/`test_runner.cpp`.
+
+### Verification
+
+Full test suite (all existing + new `test_see.cpp` + `test_nnue_incremental.cpp`): clean.
+`perft 5` from the Makruk start position: unchanged at 6,223,994 nodes (confirms move
+generation/check detection untouched — the bug and fix are confined to `seeGe()`).
+`tools/build_verify.sh`: clean (16/16 crash probes).
+
+### Gauntlet result — noisy, not read as a regression
+
+Same equal-condition format as Rounds 18's two baselines (200 games, book-paired, 200ms both
+sides, seed=99, vs Fairy-Stockfish-NNUE):
+
+* Round 18 (incremental NNUE, no SEE fix): 0W 45D 155L → Elo −359
+* This round (SEE fix added): 0W 41D 159L → Elo **−377**
+
+A nominal −18 Elo, but this project's own demonstrated single-seed noise band is up to **46
+Elo** (see `gauntlet-seed-noise-finding` memory) — an 18 Elo delta is comfortably inside that
+band and is not treated as evidence of a real regression. Unlike the NNUE net-selection rounds
+(where Elo *is* the primary signal for an inherently uncertain "does this data/architecture
+change help" question), this is a **proven logic bug** — verified by mathematical derivation,
+direct empirical reproduction, and a 2165-check regression suite that demonstrably catches the
+bug when reverted. The deploy decision rests on that correctness proof, not on a single noisy
+N=200 gauntlet. Deployed.
+
+### Flagged, not fixed: SEE piece-check ordering doesn't match Makruk values
+
+While rewriting the buggy lines, noticed `seeGe()`'s attacker-check order
+(`PAWN, KNIGHT, BISHOP, ROOK, QUEEN`) is inherited verbatim from upstream chess (where it
+matches ascending value: Pawn~100 < Knight~300 ≈ Bishop~300 < Rook~500 < Queen~900). Makruk's
+actual values are very different: **Pawn(126) < Met/QUEEN(420) < Khon/BISHOP(660) <
+Knight(781) < Rook(1276)** — Met is the *second-cheapest* piece, not the most expensive, yet is
+still checked *last* in the chain. The standard SEE algorithm assumes attackers are tried in
+ascending value order (the "assume optimal play" invariant); checking Knight before the
+cheaper Khon, and Met dead last, means `seeGe()` may not always pick the truly-least-valuable
+attacker first, and can misjudge equal/near-equal exchanges. This was noticed but deliberately
+**not fixed this round** — kept the approved fix surgical (attack-pattern correctness only).
+Worth a focused follow-up: reorder to `PAWN, QUEEN, BISHOP, KNIGHT, ROOK` and re-verify against
+`test_see.cpp` (which would need extending, since order doesn't change the reference-vs-actual
+comparison already in place unless the *reference* also reorders).
+
+### Net Archive / deployment note
+
+This is a pure `position.cpp` search-correctness fix, independent of which net is embedded —
+`src/evaluate.h` unchanged, still `2020277415.bin` (Round 14).

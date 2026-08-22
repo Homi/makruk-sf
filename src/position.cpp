@@ -651,11 +651,27 @@ namespace Nebula{
           break;
       }
       res^=1;
+      // Khon (BISHOP) is color-dependent (forward + diagonals) and not a
+      // slider; Met (QUEEN) is color-independent 4-diagonal and not a slider
+      // either. Both must use the same reverse-color / no-occupied-dependence
+      // pattern as attackersTo()/setCheckInfo()/sliderBlockers() below --
+      // NOT attacksBb<BISHOP>(to,occupied)&pieces(BISHOP,QUEEN), which
+      // (a) silently unions both colors' Khon directions (a White Khon can
+      // never be revealed as attacking via a Black-only direction, or vice
+      // versa) and (b) has no "revealing" concept at all since neither piece
+      // slides -- removing an occupant never exposes a new Khon/Met attacker,
+      // so this term never needs recomputing once the initial attackersTo()
+      // call has run. Also note pieces(ROOK,QUEEN) below is wrong for the
+      // same reason sliderBlockers() deliberately uses pieces(ROOK) alone:
+      // Met has no rank/file movement, so it can never be a Rook-line sniper.
+      const uint64_t khonMetAttackers=(khonAttacksBb(BLACK,to)&pieces(WHITE,BISHOP))
+        |(khonAttacksBb(WHITE,to)&pieces(BLACK,BISHOP))
+        |(pseudoAttacks[QUEEN][to]&pieces(QUEEN));
       if ((bb=stmAttackers&pieces(PAWN))){
         if ((swap=PawnValueMg-swap)<res)
           break;
         occupied^=leastSignificantSquareBb(bb);
-        attackers|=attacksBb<BISHOP>(to,occupied)&pieces(BISHOP,QUEEN);
+        attackers|=khonMetAttackers;
       }
       else if ((bb=stmAttackers&pieces(KNIGHT))){
         if ((swap=KnightValueMg-swap)<res)
@@ -666,20 +682,20 @@ namespace Nebula{
         if ((swap=BishopValueMg-swap)<res)
           break;
         occupied^=leastSignificantSquareBb(bb);
-        attackers|=attacksBb<BISHOP>(to,occupied)&pieces(BISHOP,QUEEN);
+        attackers|=khonMetAttackers;
       }
       else if ((bb=stmAttackers&pieces(ROOK))){
         if ((swap=RookValueMg-swap)<res)
           break;
         occupied^=leastSignificantSquareBb(bb);
-        attackers|=attacksBb<ROOK>(to,occupied)&pieces(ROOK,QUEEN);
+        attackers|=attacksBb<ROOK>(to,occupied)&pieces(ROOK);
       }
       else if ((bb=stmAttackers&pieces(QUEEN))){
         if ((swap=QueenValueMg-swap)<res)
           break;
         occupied^=leastSignificantSquareBb(bb);
-        attackers|=(attacksBb<BISHOP>(to,occupied)&pieces(BISHOP,QUEEN))
-          |(attacksBb<ROOK>(to,occupied)&pieces(ROOK,QUEEN));
+        attackers|=(khonMetAttackers)
+          |(attacksBb<ROOK>(to,occupied)&pieces(ROOK));
       }
       else
         return attackers&~pieces(stm)?res^1:res;
