@@ -2409,3 +2409,99 @@ Round 13 precedent). Comparison binaries (`src/sf-kernel-round14`,
 * `src/2020277415.bin` — Round 14 net, **currently embedded, unchanged**
 * `src/150547052.bin` — Round 16 net int16 MKN2, epoch 59, val_loss=0.547813, inconclusive
   vs Round 14 (avg −11 Elo, high seed variance), not deployed, untracked
+
+## Round 17 — SIGSEGV Re-Investigation: Still Unreproduced, Build-Verification Gate Added (2026-08-22)
+
+### Motivation
+
+Re-opened the unfixed depth≥9 SIGSEGV (see "Round 10" and "Round 10 Follow-up" above) on
+user request, ~5 weeks after the defensive-hardening commit (`0e3ea6d`). Two Explore
+agents first re-audited current state before any new reproduction attempt:
+
+1. **No code has changed** in any crash-adjacent file (`position.cpp`, `misc.h`,
+   `half_ka_v2_makruk.*`, `search.cpp`, `movepick.cpp`) since `0e3ea6d` — rules out "a
+   later change reintroduced it." Two new hypotheses were checked and ruled out:
+   `movepick.cpp` has zero Makruk-specific piece bookkeeping to desync (generic
+   Stockfish move-ordering code, `grep` for `Makruk|counting|promotion` returns nothing);
+   `MakrukCountingState` — copied via `StateInfo`'s partial `memcpy` in `doMove`
+   (`offsetof(StateInfo,key)`, deliberately placed before `key` per an existing code
+   comment) — is fully POD/trivially-copyable, safe by construction.
+2. **The hardened `abort()` has never fired** in ~5 weeks of subsequent activity (Rounds
+   11–16: exhaustive grep for `FATAL`/`SIGSEGV`/core files/journalctl entries, all clean).
+   Not evidence the bug is gone, though: every one of those rounds ran our own engine
+   under **movetime**-based search in gauntlets, never fixed `go depth N` — the exact
+   depth≥9-fixed-depth trigger condition from Round 10 was simply never exercised again.
+
+**New working hypothesis (unconfirmed, unprovable retroactively):** the original crash may
+have come from a corrupted/partially-written build rather than a live source bug. This
+session personally observed exactly that failure mode — a real reboot interrupted a `make
+build` mid-compile during Round 16 (2026-08-02), and recovery required a full `make clean`
+rebuild specifically to avoid trusting a possibly-truncated `.o` file. This would explain
+every observed data point (one binary crashing 3/3 deterministically, no binary since —
+including 1,350 prior reproduction attempts — ever reproducing it), but the original
+crashing binary no longer exists, so it cannot be verified either way.
+
+Given the scale of prior reproduction effort (~1,350 invocations, zero crashes) and this
+project's established preference for honest "can't-reproduce, hardened-not-fixed"
+reporting over false-confidence fixes, the user chose a bounded reproduction attempt
+followed by strengthened defenses regardless of outcome (rather than either a full repeat
+of the 1,350-invocation sweep, or skipping reproduction entirely).
+
+### Phase 1 — bounded reproduction attempt: no reproduction
+
+Clean-rebuilt the binary (`make clean && make build`), reverified all tests pass, then ran
+`tools/training/round17_crash_repro.sh`: **150 self-play games** (`--mode depth_handicap
+--depth-cap 1 --movetime 300 --no-counting`, deliberately **without** `--strong-depth` so
+the strong side's movetime search deepens freely past depth 9 — the exact condition that
+originally triggered the crash), split across both known imbalanced-FEN pools
+(`imbalanced_fens.txt`, `imbalanced_fens_v5.txt` — the latter containing the exact FEN that
+first surfaced the bug, `r2mksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w`), 3 fresh seeds per
+pool (25 games each). `ulimit -c unlimited` was set so a raw segfault (as opposed to the
+now-hardened `abort()` paths) would leave a core file for forensics.
+
+**Result: 150/150 games completed, all exit code 0. Zero `FATAL` diagnostics in any stderr
+log. Zero core dump files.** Consistent with — not proof against — the bug still existing;
+this is now the second independent replication of the original discovery recipe (after the
+Round 10 Follow-up's 60-game attempt) to come back clean.
+
+### Phase 2 — `tools/build_verify.sh` added as a standing safety net
+
+Since a source-level fix isn't possible without a reproducing case, added one concrete,
+cheap, permanent mitigation targeting both the build-corruption hypothesis and ongoing
+regression coverage:
+
+* Always does a **full clean rebuild** (`make clean && make build`) — never trusts
+  incremental build state, directly addressing the build-corruption hypothesis: a verify
+  step run against a possibly-corrupted incremental build would be worthless.
+* Runs the existing unit test suite (`src/makruk/build_tests.sh`).
+* Runs a compact **16-invocation crash-trigger probe**: 2 representative imbalanced FENs
+  (one from each pool, including the original discovery FEN) × depths {9, 12, 16, 20} ×
+  `UseCounting` {true, false}, each sent via UCI (`position fen ... / go depth N`) with a
+  30s timeout, checking for a clean exit. Reports pass/fail per case and a final
+  `BUILD VERIFIED OK` / failure summary.
+
+Sanity-checked against the current known-good tree: clean rebuild succeeded, full test
+suite passed, 16/16 probe invocations exited cleanly. This is now the standard step to run
+after any `make build` before trusting a binary for a training round or gauntlet —
+documented practice (no CI in this project), same status as `build_tests.sh` today.
+
+### Decision: no code fix — root cause remains unknown, defended at one more layer
+
+Consistent with this project's established practice, the outcome is reported honestly
+rather than claimed as fixed: **the crash remains unreproduced** after this session's
+bounded attempt, on top of the prior 1,350-invocation sweep. No new source-level lead was
+found. The existing hardening (`Position::setCheckInfo` and `ValueList::pushBack` aborting
+with FEN/ply/side diagnostics instead of segfaulting) remains the only concrete defense
+against the original failure mode; `tools/build_verify.sh` adds a second, independent layer
+of defense against the leading (but unconfirmed) alternative explanation. If the crash
+resurfaces in the future, `build_verify.sh`'s probe or the existing hardening's diagnostic
+output should be the first thing checked — either would finally provide a reproducing case
+to drive a real fix.
+
+### Files added this round
+
+* `tools/build_verify.sh` — standing post-build verification gate (Phase 2), committed
+* `tools/training/round17_crash_repro.sh` — Phase 1's bounded reproduction driver,
+  committed for reuse if another attempt is warranted later
+* `tools/gauntlet_out/round17_repro/` — raw logs/PGN/JSONL from the 150-game reproduction
+  attempt (gitignored, kept on disk for reference)
