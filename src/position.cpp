@@ -667,8 +667,28 @@ namespace Nebula{
       const uint64_t khonMetAttackers=(khonAttacksBb(BLACK,to)&pieces(WHITE,BISHOP))
         |(khonAttacksBb(WHITE,to)&pieces(BLACK,BISHOP))
         |(pseudoAttacks[QUEEN][to]&pieces(QUEEN));
+      // Check order must follow ascending Makruk piece value so SEE always
+      // tries the truly-least-valuable attacker first (the algorithm's core
+      // "assume optimal play" invariant). Makruk values are very different
+      // from chess: Met (QUEEN slot, 420) is the second-cheapest piece, well
+      // below Khon (BISHOP slot, 660) and Knight (781) -- not the most
+      // expensive as in chess, where this order (pawn, knight, bishop, rook,
+      // queen) originally came from.
       if ((bb=stmAttackers&pieces(PAWN))){
         if ((swap=PawnValueMg-swap)<res)
+          break;
+        occupied^=leastSignificantSquareBb(bb);
+        attackers|=khonMetAttackers;
+      }
+      else if ((bb=stmAttackers&pieces(QUEEN))){
+        if ((swap=QueenValueMg-swap)<res)
+          break;
+        occupied^=leastSignificantSquareBb(bb);
+        attackers|=(khonMetAttackers)
+          |(attacksBb<ROOK>(to,occupied)&pieces(ROOK));
+      }
+      else if ((bb=stmAttackers&pieces(BISHOP))){
+        if ((swap=BishopValueMg-swap)<res)
           break;
         occupied^=leastSignificantSquareBb(bb);
         attackers|=khonMetAttackers;
@@ -678,24 +698,11 @@ namespace Nebula{
           break;
         occupied^=leastSignificantSquareBb(bb);
       }
-      else if ((bb=stmAttackers&pieces(BISHOP))){
-        if ((swap=BishopValueMg-swap)<res)
-          break;
-        occupied^=leastSignificantSquareBb(bb);
-        attackers|=khonMetAttackers;
-      }
       else if ((bb=stmAttackers&pieces(ROOK))){
         if ((swap=RookValueMg-swap)<res)
           break;
         occupied^=leastSignificantSquareBb(bb);
         attackers|=attacksBb<ROOK>(to,occupied)&pieces(ROOK);
-      }
-      else if ((bb=stmAttackers&pieces(QUEEN))){
-        if ((swap=QueenValueMg-swap)<res)
-          break;
-        occupied^=leastSignificantSquareBb(bb);
-        attackers|=(khonMetAttackers)
-          |(attacksBb<ROOK>(to,occupied)&pieces(ROOK));
       }
       else
         return attackers&~pieces(stm)?res^1:res;

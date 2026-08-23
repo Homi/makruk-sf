@@ -2763,3 +2763,61 @@ comparison already in place unless the *reference* also reorders).
 
 This is a pure `position.cpp` search-correctness fix, independent of which net is embedded —
 `src/evaluate.h` unchanged, still `2020277415.bin` (Round 14).
+
+## Round 20 — seeGe() Attacker-Check Order Fixed to Match Makruk Values (2026-08-23)
+
+### Motivation
+
+Round 19 deliberately left one flagged issue unfixed to keep that change surgical: `seeGe()`'s
+attacker-check order (`PAWN, KNIGHT, BISHOP, ROOK, QUEEN`) is inherited from upstream chess's
+ascending-value order (Pawn < Knight ≈ Bishop < Rook < Queen), but Makruk's actual values are
+very different — `Pawn(126) < Met/QUEEN(420) < Khon/BISHOP(660) < Knight(781) < Rook(1276)`.
+Met is the *second-cheapest* piece, not the most expensive, yet was checked *last*. Asked this
+round to fix it.
+
+### Fix
+
+Reordered the `if`/`else if` chain in `Position::seeGe()` to
+`PAWN, QUEEN, BISHOP, KNIGHT, ROOK` — ascending Makruk value order, matching SEE's core
+"assume optimal play" invariant (always try the truly-least-valuable attacker first at each
+step). Each branch's internal logic (value subtraction, which reveal-set gets recomputed after
+removing that piece type) was left exactly as-is from the Round 19 fix — only the check *order*
+changed.
+
+### This is a real correctness fix, not cosmetic — confirmed two ways
+
+1. **Updated `test_see.cpp`'s `referenceSeeGe()` to the same corrected order** (it must match
+   `seeGe()`'s order exactly, since which attacker is tried first is part of SEE's actual
+   result, not just an optimization/performance detail). All 2165 checks still pass.
+2. **Verified the order genuinely matters** by temporarily reverting *only* the reference's
+   order back to the old (mismatched) ordering while keeping the real `seeGe()` fixed — this
+   produced 4 real disagreements between `seeGe()` and the intentionally-mismatched reference,
+   directly proving check order changes SEE's boolean output, not merely its internal
+   bookkeeping. Restored the matching order immediately after confirming this.
+
+### Verification
+
+Full test suite (including both new/recent tests): clean. `perft 5`: unchanged at 6,223,994
+nodes. `tools/build_verify.sh`: clean (16/16 crash probes).
+
+### Gauntlet result — real, positive improvement
+
+Same equal-condition format as Rounds 18-19's baselines:
+
+* Round 19 (attack-pattern fix only, order unfixed): 0W 41D 159L → Elo −377
+* This round (order fix added): 0W 48D 152L → Elo **−346**
+
+**+31 Elo over Round 19, +13 Elo over the original Round 18 baseline (−359).** Still technically
+inside this project's demonstrated ~46 Elo single-seed noise band, so not claimed as a precisely
+quantified gain — but the direction is consistent with the correctness argument (SEE now
+actually satisfies its least-valuable-attacker-first invariant for Makruk's piece values, which
+it provably did not before), and unlike the Round 19 result (which moved in the "wrong"
+direction relative to expectation and was attributed to noise), this one moved in the expected
+direction. Deployed — no net swap involved, pure `position.cpp` search-correctness change.
+
+### Files changed this round
+
+* `src/position.cpp` — `seeGe()` attacker-check reorder only, no other logic changed
+* `src/makruk/test_see.cpp` — `referenceSeeGe()` reordered to match; header comment extended
+  to document this third bug alongside Round 19's two attack-pattern bugs
+* `tools/gauntlet_out/round20_seeorder/` — raw gauntlet log/JSONL (gitignored, kept on disk)

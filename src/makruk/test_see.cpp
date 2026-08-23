@@ -15,6 +15,16 @@
 //      and is not a slider. The old code included QUEEN in
 //      attacksBb<ROOK>(to,occupied)&pieces(ROOK,QUEEN), incorrectly treating
 //      a Met anywhere on `to`'s rank/file as a potential revealed attacker.
+//   3. The attacker-check order (PAWN, KNIGHT, BISHOP, ROOK, QUEEN) was
+//      inherited from upstream's ascending chess-value order, but Makruk's
+//      actual values are very different: Pawn(126) < Met/QUEEN(420) <
+//      Khon/BISHOP(660) < Knight(781) < Rook(1276) -- Met is the
+//      second-cheapest piece, not the most expensive. SEE's correctness
+//      depends on trying the truly-least-valuable attacker first at every
+//      step; fixed to PAWN, QUEEN, BISHOP, KNIGHT, ROOK. Confirmed this is
+//      not cosmetic: deliberately mismatching referenceSeeGe()'s order
+//      against the real seeGe() (during development of this fix) produced
+//      real disagreements, not just different internal bookkeeping.
 //
 // Since the buggy terms only ever add FALSE attackers on top of an already-
 // correct attackersTo() base (see position.cpp for why), the two bugs can
@@ -90,16 +100,20 @@ bool referenceSeeGe(const Position& pos, const Move m, const Value threshold) {
         }
         res ^= 1;
         uint64_t bb;
+        // Ascending Makruk value order (Pawn 126 < Met/QUEEN 420 < Khon/BISHOP
+        // 660 < Knight 781 < Rook 1276) -- must match Position::seeGe()'s own
+        // check order exactly, since which attacker is tried first is part of
+        // SEE's actual result, not just an optimization.
         if ((bb = stmAttackers & pos.pieces(PAWN))) {
             if ((swap = PawnValueMg - swap) < res) break;
-        } else if ((bb = stmAttackers & pos.pieces(KNIGHT))) {
-            if ((swap = KnightValueMg - swap) < res) break;
-        } else if ((bb = stmAttackers & pos.pieces(BISHOP))) {
-            if ((swap = BishopValueMg - swap) < res) break;
-        } else if ((bb = stmAttackers & pos.pieces(ROOK))) {
-            if ((swap = RookValueMg - swap) < res) break;
         } else if ((bb = stmAttackers & pos.pieces(QUEEN))) {
             if ((swap = QueenValueMg - swap) < res) break;
+        } else if ((bb = stmAttackers & pos.pieces(BISHOP))) {
+            if ((swap = BishopValueMg - swap) < res) break;
+        } else if ((bb = stmAttackers & pos.pieces(KNIGHT))) {
+            if ((swap = KnightValueMg - swap) < res) break;
+        } else if ((bb = stmAttackers & pos.pieces(ROOK))) {
+            if ((swap = RookValueMg - swap) < res) break;
         } else {
             return (attackers & ~pos.pieces(stm)) ? bool(res ^ 1) : bool(res);
         }
