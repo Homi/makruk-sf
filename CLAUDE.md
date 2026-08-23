@@ -2821,3 +2821,102 @@ direction. Deployed — no net swap involved, pure `position.cpp` search-correct
 * `src/makruk/test_see.cpp` — `referenceSeeGe()` reordered to match; header comment extended
   to document this third bug alongside Round 19's two attack-pattern bugs
 * `tools/gauntlet_out/round20_seeorder/` — raw gauntlet log/JSONL (gitignored, kept on disk)
+
+## Round 21 — Scoped Fast-Math Closes Most of the NNUE nps Gap (2026-08-23)
+
+### Motivation
+
+Round 18 found nps only improved modestly (~40K → ~41-45K) after fixing the non-incremental
+NNUE accumulator, because L2 (`Linear(1024→32)`, untouched by that fix) turned out to cost
+~32.6µs/call — 5x higher than the design-phase estimate — and became the new dominant cost.
+Asked directly this round to close the gap with Fairy-Stockfish-NNUE's nps.
+
+### Investigation
+
+Live comparison confirmed the real gap: sf-kernel ~40-44K nps vs Fairy-SF-NNUE ~450-475K nps
+on the Makruk start position — roughly 11-12x. Two things investigated hands-on (direct
+compile/benchmark, not agent-derived):
+
+1. **AVX2 was a red herring.** Round 18 flagged rebuilding with `ARCH=x86-64-avx2` as a likely
+   "free" win. Tested two ways (plain `ARCH=x86-64-avx2`, and a combined
+   `ARCH=x86-64-avx2-bmi2 SUPPORTED_ARCH=true` rebuild) — **neither changed nps at all**.
+   Root cause: `src/Makefile`'s `-bmi2` ARCH profile already cascades `avx2=yes` — the project's
+   standard build (`ARCH=x86-64-bmi2`) has **always** compiled with `-mavx2`. There was nothing
+   to add.
+2. **The real bottleneck is the compiler's conservative (non-reassociating) handling of the L2
+   float reduction loop**, not available SIMD width. The `s += row[j]*l2_in[j]` accumulation has
+   a serial dependency on `s`; without reassociation permission, GCC's auto-vectorizer leaves it
+   scalar even with `-mavx2` available. Compiling just `mknn_evaluator.cpp` with the default
+   flags plus `-ffast-math`: nps jumped to **~150-188K, roughly 4x**. Confirmed the narrower,
+   safer subset `-fassociative-math -fno-signed-zeros -fno-trapping-math -fno-math-errno`
+   (reassociation permission only, without `-ffast-math`'s riskier `-ffinite-math-only`/
+   `-funsafe-math-optimizations`, which assume no NaN/Inf and could mask real bugs) gives the
+   **same speedup** — this is the flag set shipped, not full `-ffast-math`.
+
+### Second finding: the project's own default build config was inconsistent
+
+Asked whether to emphasize `ARCH=x86-64-bmi2` specifically. Checked, and found a real, separate
+issue: `src/Makefile`'s no-`ARCH` fallback was `x86-64-modern`, which enables **neither** AVX2
+nor BMI2/PEXT — a bare `make build` would silently produce a slower binary than every
+benchmark/gauntlet in this project has ever actually used. Grepping the repo's own tooling
+confirmed this wasn't hypothetical: `tools/build_verify.sh`/`round16_pipeline.sh` correctly use
+`ARCH=x86-64-bmi2`, but the older `run_pipeline.sh` uses `x86-64-modern` and
+`run_v5_pipeline.sh`/`deploy_net.sh` use `x86-64-avx2` (no PEXT) — three different
+configurations across this project's history. Fixed the Makefile's own default to
+`x86-64-bmi2`; left the three stale, no-longer-active historical scripts unmodified (out of
+scope, not part of the current workflow).
+
+### Implementation
+
+Two small changes, both in `src/Makefile`:
+1. `mknn_evaluator.o: CXXFLAGS += -fassociative-math -fno-signed-zeros -fno-trapping-math
+   -fno-math-errno` — a GNU Make target-specific variable, scoped to only this one file's
+   compilation (verified in the build log: only `mknn_evaluator.o`'s compile command carries
+   the extra flags).
+2. The `ifeq ($(ARCH),)` fallback changed from `x86-64-modern` to `x86-64-bmi2`.
+
+### Why this is safe
+
+The incremental accumulator (Round 18) is entirely `int32_t`/`int16_t` arithmetic — untouched by
+float reassociation flags, which only affect the crelu/L2/L3/out float layers. Fast-math
+reassociation is a fixed compile-time transformation, not runtime nondeterminism, so calling the
+same compiled function twice with identical inputs still gives identical output — `test_nnue_incremental.cpp`'s
+bit-exact and cross-call checks remain valid guarantees, not just "should be fine" assumptions.
+Not applied to `build_tests.sh`'s separate test-binary compile (stays flag-minimal/portable) —
+the real Makefile-built binary is what `build_verify.sh` and the live gauntlet actually exercise.
+
+### Verification
+
+`make clean && make ARCH=x86-64-bmi2 build` vs bare `make clean && make build` (no `ARCH=`):
+byte-identical binaries (confirmed via `md5sum`) — validates the default-ARCH fix. Full test
+suite (188 + 2165 checks) unchanged and clean. `perft 5`: unchanged at 6,223,994 nodes.
+`tools/build_verify.sh`: clean. Live nps on the real deployed binary: **~138-177K**, reaching
+depth 13 in 500ms at the start position (vs the old depth 9-10) — matches the throwaway-binary
+prediction closely.
+
+### Gauntlet result — the largest single-round improvement this project has measured
+
+Same equal-condition format as every round this session:
+
+* Round 20 (previous baseline): 0W 48D 152L → Elo −346
+* This round (scoped fast-math): 0W 66D 134L → Elo **−282**
+
+**+64 Elo** — well outside this project's demonstrated ~46 Elo single-seed noise ceiling, so
+read as a real improvement rather than noise (unlike several earlier small deltas that needed
+that caveat). Draws rose from 24% to 33%, consistent with deeper, stronger play against a
+comparably-tuned opponent. Deployed. Not run at a second seed given the effect size is
+substantially larger than the known noise band; a second-seed confirmatory run remains a cheap,
+available follow-up if further confidence is wanted.
+
+### Next step
+
+The nps gap with Fairy-SF-NNUE (~450-475K) is now ~2.7-3.4x, down from ~11-12x. L2 is still the
+largest remaining eval cost (int32/int16 quantization of `l2_weight_`, matching what Round 6 did
+for the FT, is the next concrete lever if further gains are wanted) — not attempted this round to
+keep the change minimal and measure this win's impact cleanly first.
+
+### Files changed this round
+
+* `src/Makefile` — the only file changed: one target-specific variable line (fast-math scoping)
+  + one default-value line (ARCH fallback)
+* `tools/gauntlet_out/round21_fastmath/` — raw gauntlet log/JSONL (gitignored, kept on disk)
