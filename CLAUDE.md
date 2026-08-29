@@ -2920,3 +2920,43 @@ keep the change minimal and measure this win's impact cleanly first.
 * `src/Makefile` — the only file changed: one target-specific variable line (fast-math scoping)
   + one default-value line (ARCH fallback)
 * `tools/gauntlet_out/round21_fastmath/` — raw gauntlet log/JSONL (gitignored, kept on disk)
+
+## Round 21 Follow-up — N=100 Confirmatory Gauntlet at a Second Seed (2026-08-29)
+
+### Motivation
+
+This project's own established practice (see the Round 15 seed-variance finding) is to test
+2+ seeds before fully trusting a gauntlet delta, especially given a demonstrated ~46 Elo
+single-seed noise band. Round 21's +64 Elo result (seed=99) is comfortably above that band, but
+given it's the largest single-round gain measured in this project's history, confirmed it at a
+second seed before treating it as settled.
+
+### Method
+
+Built two binaries from git history — `sf-kernel-round20` (commit `4aec75b`, immediately before
+the fast-math fix) and `sf-kernel-round21` (commit `4510afb`, current HEAD) — via a temporary
+git worktree, verified they're genuinely distinct (nps sanity check: ~39K vs ~180K, matching
+each round's own measurement). Ran both against Fairy-Stockfish-NNUE at the same book-paired,
+100-game, 200ms-both-sides format, seed=4242 (the same second seed used in the original Round 15
+seed-variance investigation, for continuity).
+
+### Result — direction confirmed, magnitude even larger at the second seed
+
+| | seed=99 (original) | seed=4242 (confirmatory) |
+| --- | --- | --- |
+| Round 20 (pre-fast-math) | −346 | **−372** |
+| Round 21 (post-fast-math) | −282 | **−282** |
+| **Delta** | **+64 Elo** | **+90 Elo** |
+
+Both seeds agree on direction, and the second seed's delta is *larger*, not smaller — strong
+confirmation this is a real effect, not noise. Notably, Round 21's own result was identical at
+both seeds (−282 exactly), while Round 20's varied by 26 Elo — consistent with (though not
+proof of) the earlier hypothesis that a deeper, more stable search should also reduce
+game-to-game/seed-to-seed variance, not just raise average strength. Both 100-game runs
+completed with zero crashes.
+
+### Decision
+
+No change needed — Round 21's fast-math fix was already deployed and is now confirmed, not
+just measured once. Comparison binaries (`src/sf-kernel-round20`, `src/sf-kernel-round21`)
+deleted as scratch cleanup after confirming results.
