@@ -27,6 +27,17 @@ namespace Nebula { class Position; }
 
 namespace Nebula::Eval::Nnue {
 
+// Compile-time caps for the L2/L3 "narrow bottleneck" layers, analogous to
+// MknnMaxL1 (mknn_accumulator.h). Every net trained in this project so far
+// uses L2=L3=32; these caps give generous headroom (4x) while still letting
+// evaluate() use fixed-size stack buffers instead of heap allocation for the
+// common case. A net exceeding any of MknnMaxL1/MknnMaxL2/MknnMaxL3 still
+// loads and evaluates correctly via the original std::vector-based path
+// (see MknnEvaluator::load()'s fastEvalOk_ flag) -- no capability is lost,
+// only the allocation-avoidance optimization is skipped for that net.
+inline constexpr int MknnMaxL2 = 128;
+inline constexpr int MknnMaxL3 = 128;
+
 class MknnEvaluator {
 public:
     static constexpr uint32_t MAGIC    = 0x4D4B4E4Eu; // 'MKNN'
@@ -105,6 +116,15 @@ public:
                       << Eval::Nnue::MknnMaxL1
                       << "; incremental accumulator disabled (slow path)" << std::endl;
 
+        // Whether evaluate() can use fixed-size stack buffers (no heap
+        // allocation) for this net. Independent of incremental_: a VERSION1
+        // net with small enough L1/L2/L3 still qualifies (via
+        // accumulateF32Into()), it just can't use the incremental cache.
+        // A net exceeding any cap falls back to the original always-correct
+        // std::vector-based path below -- no capability lost, only the
+        // allocation-avoidance optimization skipped.
+        fastEvalOk_ = (L1_ <= Eval::Nnue::MknnMaxL1 && L2_ <= MknnMaxL2 && L3_ <= MknnMaxL3);
+
         return true;
     }
 
@@ -126,6 +146,7 @@ private:
     int      L1_ = 256, L2_ = 32, L3_ = 32;
     bool     loaded_ = false;
     bool     incremental_ = false;
+    bool     fastEvalOk_ = false;
     uint32_t ver_    = 0;
 
     // VERSION 1 — float32 FT (weight layout: [L1 × DIMS])
@@ -189,6 +210,15 @@ private:
     void addColumn(IndexType idx, std::int32_t* dst) const;
     void subColumn(IndexType idx, std::int32_t* dst) const;
     void updateAccumulator(const Nebula::Position& pos, Color persp) const;
+
+    // Fast path (fastEvalOk_): fixed-size stack buffers, no heap allocation.
+    // accumulateF32Into is the raw-pointer analogue of accumulate_f32(), used
+    // only for the rare VERSION1-with-small-L1 case (VERSION2 nets within cap
+    // always go via the incremental accumulator instead). forwardPass holds
+    // the L2/L3/out math shared by both the incremental and from-scratch
+    // fast-path accumulation results.
+    void accumulateF32Into(const IndexList& indices, float* dst) const;
+    Value forwardPass(const Nebula::Position& pos, const float* acc_w, const float* acc_b) const;
 };
 
 } // namespace Nebula::Eval::Nnue

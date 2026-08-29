@@ -112,9 +112,98 @@ void MknnEvaluator::accumulateFromScratch(const Nebula::Position& pos, const Col
     refreshInto(pos, persp, out.data());
 }
 
+// Raw-pointer analogue of accumulate_f32() for the fast path. Only reachable
+// when fastEvalOk_ && !incremental_, i.e. a VERSION1 net with L1_ within
+// MknnMaxL1 (every VERSION2 net within cap is incremental_ by construction).
+void MknnEvaluator::accumulateF32Into(const IndexList& indices, float* dst) const {
+    for (int i = 0; i < L1_; ++i)
+        dst[i] = ft_bias_[i];
+    const float* w    = ft_weight_.data();
+    const int    dims = (int)Features::HalfKAv2Makruk::Dimensions;
+    for (const auto idx : indices)
+        for (int i = 0; i < L1_; ++i)
+            dst[i] += w[i * dims + idx];
+}
+
+// Shared L2/L3/out math for the fast path. acc_w/acc_b are exactly L1_ floats
+// each (already dequantized/converted), owned by the caller's stack buffers.
+Value MknnEvaluator::forwardPass(const Nebula::Position& pos, const float* acc_w,
+                                  const float* acc_b) const {
+    const bool  white_stm = (pos.stm() == WHITE);
+    const float* stm = white_stm ? acc_w : acc_b;
+    const float* opp = white_stm ? acc_b : acc_w;
+
+    // CReLU = clamp(0, 1), matching train.py's .clamp(0.0, 1.0).
+    alignas(64) float l2_in[2 * MknnMaxL1];
+    for (int i = 0; i < L1_; ++i) {
+        l2_in[i]       = crelu(stm[i]);
+        l2_in[L1_ + i] = crelu(opp[i]);
+    }
+
+    // L2 → CReLU.
+    alignas(64) float l2_out[MknnMaxL2];
+    for (int i = 0; i < L2_; ++i) {
+        float s = l2_bias_[i];
+        const float* row = l2_weight_.data() + i * 2 * L1_;
+        for (int j = 0; j < 2 * L1_; ++j)
+            s += row[j] * l2_in[j];
+        l2_out[i] = crelu(s);
+    }
+
+    // L3 → CReLU.
+    alignas(64) float l3_out[MknnMaxL3];
+    for (int i = 0; i < L3_; ++i) {
+        float s = l3_bias_[i];
+        const float* row = l3_weight_.data() + i * L2_;
+        for (int j = 0; j < L2_; ++j)
+            s += row[j] * l2_out[j];
+        l3_out[i] = crelu(s);
+    }
+
+    // Output scalar (pre-sigmoid logit).
+    float raw = out_bias_v_[0];
+    for (int j = 0; j < L3_; ++j)
+        raw += out_weight_[j] * l3_out[j];
+
+    // Exact decode: training target = sigmoid(score_cp/400), so logit(v) = raw = score_cp/400.
+    // Using raw*400 avoids computing sigmoid and then its inverse.
+    const int cp = static_cast<int>(std::clamp(raw * 400.0f, -29000.0f, 29000.0f));
+    return Value(cp);
+}
+
 Value MknnEvaluator::evaluate(const Nebula::Position& pos) const {
     using Features::HalfKAv2Makruk;
 
+    if (fastEvalOk_) {
+        // No heap allocation: fixed-size stack buffers sized by the
+        // compile-time caps (MknnMaxL1/L2/L3), which load() already checked
+        // this net fits within.
+        alignas(64) float acc_w[MknnMaxL1];
+        alignas(64) float acc_b[MknnMaxL1];
+
+        if (incremental_) {
+            updateAccumulator(pos, WHITE);
+            updateAccumulator(pos, BLACK);
+            const auto& a   = pos.state()->mknnAcc;
+            const float inv = 1.0f / static_cast<float>(ft_scale_);
+            for (int i = 0; i < L1_; ++i) {
+                acc_w[i] = static_cast<float>(a.acc[WHITE][i]) * inv;
+                acc_b[i] = static_cast<float>(a.acc[BLACK][i]) * inv;
+            }
+        } else {
+            // fastEvalOk_ && !incremental_ implies VERSION1 (see load()).
+            HalfKAv2Makruk::IndexList active_w, active_b;
+            HalfKAv2Makruk::appendActiveIndices(pos, WHITE, active_w);
+            HalfKAv2Makruk::appendActiveIndices(pos, BLACK, active_b);
+            accumulateF32Into(active_w, acc_w);
+            accumulateF32Into(active_b, acc_b);
+        }
+
+        return forwardPass(pos, acc_w, acc_b);
+    }
+
+    // Slow path: a net exceeding MknnMaxL1/L2/L3 (none in this project's
+    // history so far). Unchanged from before the fast path was added.
     std::vector<float> acc_w, acc_b;
 
     if (incremental_) {
@@ -129,8 +218,6 @@ Value MknnEvaluator::evaluate(const Nebula::Position& pos) const {
             acc_b[i] = static_cast<float>(a.acc[BLACK][i]) * inv;
         }
     } else {
-        // VERSION1 (float32) or a VERSION2 net wider than MknnMaxL1: unchanged
-        // always-from-scratch path.
         HalfKAv2Makruk::IndexList active_w, active_b;
         HalfKAv2Makruk::appendActiveIndices(pos, WHITE, active_w);
         HalfKAv2Makruk::appendActiveIndices(pos, BLACK, active_b);
@@ -148,14 +235,12 @@ Value MknnEvaluator::evaluate(const Nebula::Position& pos) const {
     const std::vector<float>& stm = white_stm ? acc_w : acc_b;
     const std::vector<float>& opp = white_stm ? acc_b : acc_w;
 
-    // CReLU = clamp(0, 1), matching train.py's .clamp(0.0, 1.0).
     std::vector<float> l2_in(2 * L1_);
     for (int i = 0; i < L1_; ++i) {
         l2_in[i]        = crelu(stm[i]);
         l2_in[L1_ + i]  = crelu(opp[i]);
     }
 
-    // L2 → CReLU.
     std::vector<float> l2_out(L2_);
     for (int i = 0; i < L2_; ++i) {
         float s = l2_bias_[i];
@@ -165,7 +250,6 @@ Value MknnEvaluator::evaluate(const Nebula::Position& pos) const {
         l2_out[i] = crelu(s);
     }
 
-    // L3 → CReLU.
     std::vector<float> l3_out(L3_);
     for (int i = 0; i < L3_; ++i) {
         float s = l3_bias_[i];
@@ -175,13 +259,10 @@ Value MknnEvaluator::evaluate(const Nebula::Position& pos) const {
         l3_out[i] = crelu(s);
     }
 
-    // Output scalar (pre-sigmoid logit).
     float raw = out_bias_v_[0];
     for (int j = 0; j < L3_; ++j)
         raw += out_weight_[j] * l3_out[j];
 
-    // Exact decode: training target = sigmoid(score_cp/400), so logit(v) = raw = score_cp/400.
-    // Using raw*400 avoids computing sigmoid and then its inverse.
     const int cp = static_cast<int>(std::clamp(raw * 400.0f, -29000.0f, 29000.0f));
     return Value(cp);
 }
