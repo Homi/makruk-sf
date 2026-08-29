@@ -52,6 +52,26 @@ from pathlib import Path
 MAKRUK_START_FEN = "rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1"
 MAX_PLY = 480
 
+
+def load_book(path: str) -> list[str]:
+    """Load an EPD/FEN opening book: one position per line, first 6
+    whitespace-separated fields are read as a FEN (trailing EPD annotation
+    fields, if any, are ignored). Blank lines and '#'-comments are skipped.
+    """
+    fens: list[str] = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split()
+            if len(fields) < 4:
+                continue
+            fens.append(" ".join(fields[:6]))
+    if not fens:
+        raise ValueError(f"no positions found in book: {path}")
+    return fens
+
 # Draw-by-score detection.
 # Stockfish's valueDraw() returns ±1 (not 0) to avoid draw loops, so checking
 # for exact 0 never accumulates.  We track streaks per engine separately:
@@ -149,9 +169,10 @@ class Engine:
 
     def search(self, moves: list[str], movetime_ms: int | None = None,
                depth: int | None = None,
-               timeout_sec: float | None = None) -> tuple[str | None, int | None, bool]:
+               timeout_sec: float | None = None,
+               start_fen: str = MAKRUK_START_FEN) -> tuple[str | None, int | None, bool]:
         """
-        Search from the Makruk start position + given moves.
+        Search from start_fen (default: Makruk start position) + given moves.
 
         Returns (bestmove, score_cp, is_mate).
         Returns (None, None, False) on crash or timeout.
@@ -159,7 +180,7 @@ class Engine:
         if not self.alive:
             return None, None, False
 
-        pos_cmd = "position fen " + MAKRUK_START_FEN
+        pos_cmd = "position fen " + start_fen
         if moves:
             pos_cmd += " moves " + " ".join(moves)
         self._send(pos_cmd)
@@ -198,7 +219,8 @@ class Engine:
         return None, None, False
 
     def search_multipv(self, moves: list[str], movetime_ms: int,
-                       top_n: int) -> list[tuple[str, int | None]]:
+                       top_n: int,
+                       start_fen: str = MAKRUK_START_FEN) -> list[tuple[str, int | None]]:
         """
         Search with MultiPV and return up to top_n (move, score_cp) pairs.
         Falls back to a single move on failure.
@@ -208,7 +230,7 @@ class Engine:
 
         self.set_option("MultiPV", top_n)
 
-        pos_cmd = "position fen " + MAKRUK_START_FEN
+        pos_cmd = "position fen " + start_fen
         if moves:
             pos_cmd += " moves " + " ".join(moves)
         self._send(pos_cmd)
@@ -275,11 +297,15 @@ def play_game(
     a_is_white: bool = True,
     adjudication_threshold: int = 0,
     adjudication_streak: int = 5,
+    start_fen: str = MAKRUK_START_FEN,
 ) -> dict:
     """Play one game between white_engine (plays White) and black_engine (plays Black).
 
     a_is_white: True when engine A plays White in this game. Used to assign time
     controls to the correct engine regardless of which color it holds.
+    start_fen: starting position (default: Makruk start). When paired with a fixed
+    book position and a_is_white flipped between two calls, produces a proper
+    "paired game" that cancels any positional bias in that opening.
     """
 
     white_engine.new_game()
@@ -306,14 +332,14 @@ def play_game(
 
         # Use MultiPV random selection during opening
         if ply < opening_plies and opening_top_n > 1:
-            candidates = engine.search_multipv(moves, mt, opening_top_n)
+            candidates = engine.search_multipv(moves, mt, opening_top_n, start_fen=start_fen)
             if candidates:
                 mv, sc = rng.choice(candidates)
             else:
                 mv, sc = None, None
             is_mate = False
         else:
-            mv, sc, is_mate = engine.search(moves, movetime_ms=mt, depth=dep)
+            mv, sc, is_mate = engine.search(moves, movetime_ms=mt, depth=dep, start_fen=start_fen)
 
         if not engine.alive:
             crash_side = "White" if is_white_turn else "Black"
@@ -385,6 +411,7 @@ def play_game(
         "white":       white_engine.name,
         "black":       black_engine.name,
         "a_is_white":  a_is_white,
+        "start_fen":   start_fen,
         "movetime_a":  movetime_a_ms,
         "movetime_b":  movetime_b_ms,
         "depth_a":     depth_a,
@@ -495,7 +522,12 @@ def main() -> None:
     ap.add_argument("--opening-top-n", type=int, default=3,
                     help="Number of top moves to randomly choose from during opening")
     ap.add_argument("--seed",        type=int,   default=None,
-                    help="Random seed (for reproducible opening randomization)")
+                    help="Random seed (for reproducible opening randomization / book sampling)")
+    ap.add_argument("--book",        default=None,
+                    help="EPD/FEN opening book path (e.g. tools/books/makruk_no_counting.epd). "
+                         "Each game pair samples one book position and plays it twice with "
+                         "colors swapped (proper paired games, cancels per-position bias). "
+                         "Mutually exclusive with --opening-plies.")
     ap.add_argument("--adjudication-threshold", type=int, default=0,
                     help="Declare win when |score| >= this for --adjudication-streak half-moves "
                          "(0 = disabled).  Useful for handicap gauntlets where checkmate is rare.")
@@ -504,6 +536,17 @@ def main() -> None:
     ap.add_argument("--output",      default=None,
                     help="Optional JSONL output file for game records")
     args = ap.parse_args()
+
+    if args.book and args.opening_plies:
+        print("ERROR: --book and --opening-plies are mutually exclusive "
+              "(the book position already sets the opening; keep the game-pairing "
+              "invariant clean by not randomizing further plies from it).", file=sys.stderr)
+        sys.exit(1)
+
+    book_fens: list[str] | None = None
+    if args.book:
+        book_fens = load_book(args.book)
+        print(f"Book      : {args.book}  ({len(book_fens)} positions)")
 
     # Resolve engine paths
     script_dir = Path(__file__).resolve().parent
@@ -560,6 +603,8 @@ def main() -> None:
           f"{'Ply':>4}  Termination")
     print("-" * 62)
 
+    pair_fen: str = MAKRUK_START_FEN  # current book position shared by a game pair
+
     try:
         for gid in range(1, args.games + 1):
             # Alternate which engine plays White
@@ -568,6 +613,11 @@ def main() -> None:
                 white_eng, black_eng = eng_a, eng_b
             else:
                 white_eng, black_eng = eng_b, eng_a
+
+            # Book mode: draw a new position at the start of each pair (odd gid),
+            # reuse it for the paired game (even gid) with colors swapped above.
+            if book_fens is not None and a_is_white:
+                pair_fen = rng.choice(book_fens)
 
             # Restart crashed engines
             for eng, path in ((eng_a, path_a), (eng_b, path_b)):
@@ -588,6 +638,7 @@ def main() -> None:
                 a_is_white=a_is_white,
                 adjudication_threshold=args.adjudication_threshold,
                 adjudication_streak=args.adjudication_streak,
+                start_fen=pair_fen if book_fens is not None else MAKRUK_START_FEN,
             )
             elapsed = time.monotonic() - t0
             games.append(game)
