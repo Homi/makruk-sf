@@ -28,4 +28,4 @@ src/makruk/temp_note.txt
 
 # Archived NNUE net binaries - only the currently-embedded net is tracked
 src/*.bin
-!src/2020277415.bin
+!src/3769833465.bin

@@ -13,6 +13,7 @@ namespace Nebula {
     void runMakrukEvalTests();
     void runSeeTests();
     void runMknnIncrementalTests();
+    void runL2QuantizationTests();
 }
 
 int main() {
@@ -24,5 +25,6 @@ int main() {
     Nebula::runMakrukEvalTests();
     Nebula::runSeeTests();
     Nebula::runMknnIncrementalTests();
+    Nebula::runL2QuantizationTests();
     return 0;
 }

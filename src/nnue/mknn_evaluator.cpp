@@ -142,12 +142,30 @@ Value MknnEvaluator::forwardPass(const Nebula::Position& pos, const float* acc_w
 
     // L2 → CReLU.
     alignas(64) float l2_out[MknnMaxL2];
-    for (int i = 0; i < L2_; ++i) {
-        float s = l2_bias_[i];
-        const float* row = l2_weight_.data() + i * 2 * L1_;
+    if (l2Quantized_) {
+        // VERSION3: int16 weight x int16 (quantized crelu) input -> int32
+        // accumulator, dequantized by (l2_scale_ * L2InputScale). load()
+        // already verified this can't overflow int32 for the loaded weights.
+        alignas(64) int16_t l2_in_q[2 * MknnMaxL1];
         for (int j = 0; j < 2 * L1_; ++j)
-            s += row[j] * l2_in[j];
-        l2_out[i] = crelu(s);
+            l2_in_q[j] = static_cast<int16_t>(l2_in[j] * float(L2InputScale) + 0.5f);
+
+        const float deq = 1.0f / (float(l2_scale_) * float(L2InputScale));
+        for (int i = 0; i < L2_; ++i) {
+            int32_t s = 0;
+            const int16_t* row = l2_weight_i16_.data() + i * 2 * L1_;
+            for (int j = 0; j < 2 * L1_; ++j)
+                s += int32_t(row[j]) * int32_t(l2_in_q[j]);
+            l2_out[i] = crelu(l2_bias_[i] + float(s) * deq);
+        }
+    } else {
+        for (int i = 0; i < L2_; ++i) {
+            float s = l2_bias_[i];
+            const float* row = l2_weight_.data() + i * 2 * L1_;
+            for (int j = 0; j < 2 * L1_; ++j)
+                s += row[j] * l2_in[j];
+            l2_out[i] = crelu(s);
+        }
     }
 
     // L3 → CReLU.

@@ -17,6 +17,7 @@
 
 #include "../position.h"
 #include "../movegen.h"
+#include "../evaluate.h"
 #include "../nnue/mknn_evaluator.h"
 #include <cstdlib>
 #include <cstring>
@@ -105,10 +106,14 @@ void runMknnIncrementalTests() {
     // never dereferences its argument, so nothing actually goes wrong) --
     // known and intentionally left as-is rather than entangling this test
     // with full engine bring-up.
+    // Load the currently-embedded net by name (NnueNetDefaultName), not a
+    // hardcoded filename -- a hardcoded name silently degrades to "SKIP" (no
+    // checks run, no failure reported) the moment the embedded net is swapped
+    // to a different file, which happened once already before this fix.
     Eval::Nnue::MknnEvaluator ev;
-    std::ifstream f("2020277415.bin", std::ios::binary);
+    std::ifstream f(NnueNetDefaultName, std::ios::binary);
     if (!f || !ev.load(f)) {
-        std::cerr << "SKIP: 2020277415.bin not loadable -- "
+        std::cerr << "SKIP: " << NnueNetDefaultName << " not loadable -- "
                      "incremental accumulator test not run\n";
         return;
     }
