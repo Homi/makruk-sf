@@ -67,6 +67,15 @@ OBJS = $(notdir $(SRCS:.cpp=.o))
 
 VPATH = syzygy:nnue:nnue/features:makruk
 
+# The L2/L3 forward pass in mknn_evaluator.cpp has a serial-dependency-chain
+# float reduction loop that GCC's auto-vectorizer won't reorder under strict
+# IEEE754 semantics, even with -mavx2 available (confirmed: AVX2 alone gives
+# no speedup here). These flags grant just enough reassociation permission to
+# vectorize it (measured ~4x nps on this file), without pulling in
+# -ffast-math's riskier -ffinite-math-only/-funsafe-math-optimizations.
+# Scoped to this one file only -- see CLAUDE.md "Round 21" for the investigation.
+mknn_evaluator.o: CXXFLAGS += -fassociative-math -fno-signed-zeros -fno-trapping-math -fno-math-errno
+
 ### ==========================================================================
 ### Section 2. High-level Configuration
 ### ==========================================================================
@@ -109,7 +118,10 @@ VPATH = syzygy:nnue:nnue/features:makruk
 ### 2.1. General and architecture defaults
 
 ifeq ($(ARCH),)
-   ARCH = x86-64-modern
+   # x86-64-bmi2 matches the configuration every benchmark/gauntlet in this
+   # project has actually used (see CLAUDE.md) -- a bare `make build` should
+   # not silently fall back to a slower, untested config.
+   ARCH = x86-64-bmi2
    help_skip_sanity = yes
 endif
 # explicitly check for the list of supported architectures (as listed with make help),

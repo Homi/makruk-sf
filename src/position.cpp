@@ -73,7 +73,20 @@ namespace Nebula{
     Square sq=SQ_A8;
     std::istringstream ss(fenStr);
     std::memset(this,0,sizeof(Position));
+    // StateInfo is trivially copyable (memset/memcpy remain well-defined) but no
+    // longer a "trivial type" per the strict standard definition, because
+    // MknnAccumulator's computed[2] has a default member initializer -- that
+    // NSDMI is what guarantees a fresh StateInfo always starts with a correctly
+    // false/empty accumulator cache, everywhere one is constructed, including
+    // here where memset(0) already achieves the same result byte-for-byte.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
     std::memset(si,0,sizeof(StateInfo));
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     st=si;
     ss>>std::noskipws;
     while (ss>>token&&!isspace(token)){
@@ -129,8 +142,6 @@ namespace Nebula{
         Color claimant;
         if (shouldActivateMakrukCounting(sig, claimant, gMakrukCountingMode))
             activateMakrukCounting(st->makrukCounting, *this, claimant, gMakrukCountingMode);
-        if (shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy))
-            activateMakrukCounting(st->makrukCounting, *this, claimant, MakrukCountingMode::Fairy);
         // Otherwise makrukCounting stays zeroed (inactive) from the memset above.
     }
 
@@ -176,6 +187,12 @@ namespace Nebula{
   }
 
   void Position::setState(StateInfo* si) const{
+    // Defensive (Position::set() already zeroes the whole StateInfo via memset,
+    // which correctly sets computed[]=false too, but this closes the same gap
+    // shape a prior investigation flagged for the legacy accumulator field --
+    // a root StateInfo must never be treated as having a valid cached MKN
+    // accumulator).
+    si->mknnAcc.computed[WHITE]=si->mknnAcc.computed[BLACK]=false;
     si->pawnKey=Zobrist::noPawns;
     si->nonPawnMaterial[WHITE]=si->nonPawnMaterial[BLACK]=VALUE_ZERO;
     si->checkersBB=attackersTo(square<KING>(sideToMove))&pieces(~sideToMove);
@@ -386,7 +403,18 @@ namespace Nebula{
     if (thisThread)
       thisThread->nodes.fetch_add(1,std::memory_order_relaxed);
     uint64_t k=st->key^Zobrist::side;
+    // See the matching comment in Position::set(): StateInfo remains trivially
+    // copyable despite MknnAccumulator's NSDMI, so this partial memcpy (fields
+    // before 'key' only -- everything from 'key' onward, including mknnAcc, is
+    // explicitly recomputed/reset below) stays well-defined.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
     std::memcpy(&newSt,st, offsetof(StateInfo,key));
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     newSt.previous=st;
     st=&newSt;
     ++gamePly;
@@ -394,6 +422,8 @@ namespace Nebula{
     ++st->pliesFromNull;
     st->accumulator.computed[WHITE]=false;
     st->accumulator.computed[BLACK]=false;
+    st->mknnAcc.computed[WHITE]=false;
+    st->mknnAcc.computed[BLACK]=false;
     auto& dp=st->dirtyPiece;
     dp.dirty_num=1;
     const Color us=sideToMove;
@@ -488,8 +518,6 @@ namespace Nebula{
         Color claimant;
         if (shouldActivateMakrukCounting(sig, claimant, gMakrukCountingMode))
             activateMakrukCounting(st->makrukCounting, *this, claimant, gMakrukCountingMode);
-        if (shouldActivateMakrukCounting(sig, claimant, MakrukCountingMode::Fairy))
-            activateMakrukCounting(st->makrukCounting, *this, claimant, MakrukCountingMode::Fairy);
     } else {
         updateMakrukCountingState(st->makrukCounting, *this);
     }
@@ -545,13 +573,25 @@ namespace Nebula{
   }
 
   void Position::doNullMove(StateInfo& newSt){
+    // See the matching comment in Position::set()/doMove(). This copies further
+    // than doMove's does (through 'accumulator', not just through 'key') but
+    // mknnAcc still lives strictly after it and is explicitly reset below.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
     std::memcpy(&newSt,st, offsetof(StateInfo,accumulator));
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
     newSt.previous=st;
     st=&newSt;
     st->dirtyPiece.dirty_num=0;
     st->dirtyPiece.piece[0]=NO_PIECE;
     st->accumulator.computed[WHITE]=false;
     st->accumulator.computed[BLACK]=false;
+    st->mknnAcc.computed[WHITE]=false;
+    st->mknnAcc.computed[BLACK]=false;
     if (st->epSquare!=SQ_NONE){
       st->key^=Zobrist::enpassant[fileOf(st->epSquare)];
       st->epSquare=SQ_NONE;
@@ -611,35 +651,58 @@ namespace Nebula{
           break;
       }
       res^=1;
+      // Khon (BISHOP) is color-dependent (forward + diagonals) and not a
+      // slider; Met (QUEEN) is color-independent 4-diagonal and not a slider
+      // either. Both must use the same reverse-color / no-occupied-dependence
+      // pattern as attackersTo()/setCheckInfo()/sliderBlockers() below --
+      // NOT attacksBb<BISHOP>(to,occupied)&pieces(BISHOP,QUEEN), which
+      // (a) silently unions both colors' Khon directions (a White Khon can
+      // never be revealed as attacking via a Black-only direction, or vice
+      // versa) and (b) has no "revealing" concept at all since neither piece
+      // slides -- removing an occupant never exposes a new Khon/Met attacker,
+      // so this term never needs recomputing once the initial attackersTo()
+      // call has run. Also note pieces(ROOK,QUEEN) below is wrong for the
+      // same reason sliderBlockers() deliberately uses pieces(ROOK) alone:
+      // Met has no rank/file movement, so it can never be a Rook-line sniper.
+      const uint64_t khonMetAttackers=(khonAttacksBb(BLACK,to)&pieces(WHITE,BISHOP))
+        |(khonAttacksBb(WHITE,to)&pieces(BLACK,BISHOP))
+        |(pseudoAttacks[QUEEN][to]&pieces(QUEEN));
+      // Check order must follow ascending Makruk piece value so SEE always
+      // tries the truly-least-valuable attacker first (the algorithm's core
+      // "assume optimal play" invariant). Makruk values are very different
+      // from chess: Met (QUEEN slot, 420) is the second-cheapest piece, well
+      // below Khon (BISHOP slot, 660) and Knight (781) -- not the most
+      // expensive as in chess, where this order (pawn, knight, bishop, rook,
+      // queen) originally came from.
       if ((bb=stmAttackers&pieces(PAWN))){
         if ((swap=PawnValueMg-swap)<res)
           break;
         occupied^=leastSignificantSquareBb(bb);
-        attackers|=attacksBb<BISHOP>(to,occupied)&pieces(BISHOP,QUEEN);
+        attackers|=khonMetAttackers;
+      }
+      else if ((bb=stmAttackers&pieces(QUEEN))){
+        if ((swap=QueenValueMg-swap)<res)
+          break;
+        occupied^=leastSignificantSquareBb(bb);
+        attackers|=(khonMetAttackers)
+          |(attacksBb<ROOK>(to,occupied)&pieces(ROOK));
+      }
+      else if ((bb=stmAttackers&pieces(BISHOP))){
+        if ((swap=BishopValueMg-swap)<res)
+          break;
+        occupied^=leastSignificantSquareBb(bb);
+        attackers|=khonMetAttackers;
       }
       else if ((bb=stmAttackers&pieces(KNIGHT))){
         if ((swap=KnightValueMg-swap)<res)
           break;
         occupied^=leastSignificantSquareBb(bb);
       }
-      else if ((bb=stmAttackers&pieces(BISHOP))){
-        if ((swap=BishopValueMg-swap)<res)
-          break;
-        occupied^=leastSignificantSquareBb(bb);
-        attackers|=attacksBb<BISHOP>(to,occupied)&pieces(BISHOP,QUEEN);
-      }
       else if ((bb=stmAttackers&pieces(ROOK))){
         if ((swap=RookValueMg-swap)<res)
           break;
         occupied^=leastSignificantSquareBb(bb);
-        attackers|=attacksBb<ROOK>(to,occupied)&pieces(ROOK,QUEEN);
-      }
-      else if ((bb=stmAttackers&pieces(QUEEN))){
-        if ((swap=QueenValueMg-swap)<res)
-          break;
-        occupied^=leastSignificantSquareBb(bb);
-        attackers|=(attacksBb<BISHOP>(to,occupied)&pieces(BISHOP,QUEEN))
-          |(attacksBb<ROOK>(to,occupied)&pieces(ROOK,QUEEN));
+        attackers|=attacksBb<ROOK>(to,occupied)&pieces(ROOK);
       }
       else
         return attackers&~pieces(stm)?res^1:res;
