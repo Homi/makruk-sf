@@ -104,6 +104,12 @@ namespace Nebula{
       th->rootMoves=rootMoves;
       th->rootPos.set(pos.fen(),pos.isChess960(),&th->rootState,th);
       th->rootState=setupStates->back();
+      // rootState is a persistent Thread member that survives across `go`
+      // commands; the whole-struct assignment above is safe today only because
+      // its source always happens to have computed=false already. Make that
+      // explicit rather than relying on the coincidence.
+      th->rootState.mknnAcc.computed[WHITE]=false;
+      th->rootState.mknnAcc.computed[BLACK]=false;
     }
     main()->startSearching();
   }

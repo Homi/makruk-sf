@@ -17,8 +17,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <istream>
+#include <iostream>
 #include <vector>
 #include "features/half_ka_v2_makruk.h"
+#include "mknn_accumulator.h"
 #include "../types.h"
 
 namespace Nebula { class Position; }
@@ -92,19 +94,38 @@ public:
 
         if (!stream) return false;
         loaded_ = true;
+
+        // Incremental accumulator updates (see updateAccumulator()) are only
+        // implemented for VERSION2 (int16 MKN2, the only actively-deployed
+        // format since Round 6) and only up to MknnMaxL1. VERSION1 and any
+        // oversized VERSION2 net keep the original always-full-refresh path.
+        incremental_ = (ver_ == VERSION2 && L1_ <= Eval::Nnue::MknnMaxL1);
+        if (ver_ == VERSION2 && !incremental_)
+            std::cerr << "MKNN: L1=" << L1_ << " exceeds MknnMaxL1="
+                      << Eval::Nnue::MknnMaxL1
+                      << "; incremental accumulator disabled (slow path)" << std::endl;
+
         return true;
     }
 
-    bool isLoaded()  const { return loaded_; }
-    int  version()   const { return (int)ver_; }
-    int  ftScale()   const { return ft_scale_; }
+    bool isLoaded()     const { return loaded_; }
+    int  version()      const { return (int)ver_; }
+    int  ftScale()      const { return ft_scale_; }
+    bool incremental()  const { return incremental_; }
+    int  l1()           const { return L1_; }
 
     // Returns evaluation from the side-to-move perspective, in centipawns.
     Value evaluate(const Nebula::Position& pos) const;
 
+    // Test-only: from-scratch reference accumulation for one perspective, bypassing
+    // the incremental cache entirely. Writes L1_ int32 values into out (resized).
+    void accumulateFromScratch(const Nebula::Position& pos, Color persp,
+                                std::vector<std::int32_t>& out) const;
+
 private:
     int      L1_ = 256, L2_ = 32, L3_ = 32;
     bool     loaded_ = false;
+    bool     incremental_ = false;
     uint32_t ver_    = 0;
 
     // VERSION 1 — float32 FT (weight layout: [L1 × DIMS])
@@ -161,6 +182,13 @@ private:
         for (int i = 0; i < L1_; ++i)
             acc[i] = static_cast<float>(raw[i]) * inv;
     }
+
+    // Incremental accumulator support (VERSION2 / int16 only -- see incremental_).
+    // Defined in mknn_evaluator.cpp, where Position is a complete type.
+    void refreshInto(const Nebula::Position& pos, Color persp, std::int32_t* dst) const;
+    void addColumn(IndexType idx, std::int32_t* dst) const;
+    void subColumn(IndexType idx, std::int32_t* dst) const;
+    void updateAccumulator(const Nebula::Position& pos, Color persp) const;
 };
 
 } // namespace Nebula::Eval::Nnue
