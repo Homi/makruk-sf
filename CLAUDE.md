@@ -3047,3 +3047,122 @@ scoped or requested yet. Flagged for a future session/explicit request.
 
 * `src/nnue/mknn_evaluator.h` / `.cpp` — the only files changed, via PR #16
   (`nnue-eval-heap-refactor` → `main`)
+
+**Update:** the doc/tooling gap above was closed the same day via PR #17
+(`docs-tooling-sync-main` → `main`) — see [[main-branch-doc-tooling-gap]] in memory.
+
+## Round 23 — VERSION3 (MKN3) int16 L2 Quantization: Real nps Gain, Elo Inconclusive (2026-08-29)
+
+### Motivation
+
+Asked directly to continue closing the nps gap after Round 22's heap-allocation fix. Before
+committing to the bigger-effort L2 weight quantization idea flagged since Round 21, first
+built a cheap throwaway prototype (quantize at load time in C++, `std::lround` per element) to
+re-measure whether it was worth doing properly. That prototype only showed **+3.5% nps** —
+much smaller than hoped, since L2's cost had already dropped 5.8x from Round 21's fast-math fix
+(32.6µs → 5.6µs), leaving less room for this lever. Reported the recalibrated economics
+honestly and asked whether to proceed anyway; told to go ahead with the full implementation.
+
+### Implementation
+
+New binary format VERSION3 (MKN3): as VERSION2 (int16 FT), plus int16 L2 weight with a
+per-net-calibrated scale stored in the header. L3/out stay float32 (32×32 and 32×1 — too small
+to matter). `crelu` output is quantized to an unsigned 7-bit fixed point [0, 127]
+(`L2InputScale`, an architecture constant, not stored). `load()` computes an overflow-safety
+check on the actual loaded int16 weights (worst-case int32 accumulator sum must stay under
+2^30, a 2x margin below `INT32_MAX`) and **rejects** the net if unsafe — this guards a
+badly-calibrated exporter, not just this loader. `tools/training/export_int16.py` gained a
+`--quantize-l2` flag that calibrates the scale with the identical formula, so a bad scale is
+caught at export time too.
+
+New net `3769833465.bin`, exported from the same checkpoint (`makruk_round14.pt`) as the
+previously-embedded `2020277415.bin` — confirmed its VERSION2 twin re-export is CRC32-identical
+to the deployed net (`2020277415`), so this is a format change to the *same* trained weights,
+not a different net.
+
+### Testing methodology (int16 quantization is lossy, not bit-exact)
+
+Unlike Round 18/22's bit-exact refactors, int16 L2 quantization is deliberately lossy — there's
+no exact reference to check against. New `src/makruk/test_l2_quantization.cpp` builds a small
+synthetic net, encodes it as both VERSION2 (float32) and VERSION3 (int16, quantized from the
+*identical* float weights), and asserts `evaluate()` stays within an empirically-calibrated
+tolerance (120cp, ~2x headroom over the synthetic net's observed 55cp worst case — the small
+synthetic net's L2=8 has less downstream averaging than the real net's L2=32, so its worst-case
+drift runs meaningfully higher). Verified the test has teeth the same way Round 19/20 did:
+temporarily broke the dequantization formula (dropped the `L2InputScale` factor), confirmed the
+test caught it (a new failure appeared, max diff jumped 55cp → 125cp), then restored the fix.
+Also verified the overflow-safety guard actually rejects an unsafe net (not just a happy-path
+check), with a same-shape auto-calibrated positive control confirming the rejection is really
+about the scale, not something else wrong with the synthetic net.
+
+Also found and fixed a latent test fragility in the process: `test_nnue_incremental.cpp`
+hardcoded the net filename `"2020277415.bin"` instead of using `NnueNetDefaultName` — swapping
+the embedded net (as this round does) would have silently degraded it to "SKIP" with zero
+checks run and zero failure reported. Now loads by the same name `evaluate.h` embeds.
+
+### Verification
+
+- Full test suite (188 NNUE + 2165 SEE + new L2 quantization checks): pass.
+- `perft 5`: unchanged, 6,223,994 nodes.
+- **Direct eval-drift check on the real deployed net** (not just the synthetic test): VERSION2
+  vs VERSION3 loaded from the identical checkpoint, compared across 11 diverse positions via a
+  temporary debug UCI command — max drift **2cp**. Much smaller than the synthetic test's worst
+  case, consistent with the real net's larger L1=512 (more terms averaging out quantization
+  noise) and smoother trained weight distribution vs the synthetic test's random weights.
+- nps (`bench`, node counts differ between runs since small eval differences change move
+  ordering — expected once quantization is involved, unlike Rounds 18/22's node-count-identical
+  comparisons): 273,614 → 367,409 (**+34%**). Substantially larger than the throwaway
+  prototype's ~3.5%, traced to the prototype's `std::lround()` calls per quantized element
+  blocking auto-vectorization — this implementation uses a cheap multiply-and-truncate round
+  instead, letting both the quantization step and the dot product vectorize. A good example of
+  why a *cheap* prototype's measurement doesn't always predict a *properly implemented*
+  version's ceiling — the prototype correctly showed the idea wasn't obviously worthless, but
+  underestimated it for an unrelated implementation-detail reason.
+
+### Gauntlet result — honest caveat, not a confirmed win like Rounds 21/22
+
+Same equal-condition format as every round since 18 (book-paired, 200ms both sides, vs
+Fairy-Stockfish-NNUE):
+
+```
+seed=99   (N=200): before -269 -> after -255   (+14 Elo)
+seed=4242 (N=100): before -252 -> after -252   (+0 Elo)
+pooled    (N=300 each): before ~-263 -> after ~-254   (+~10 Elo)
+```
+
+Unlike Round 21 (+64/+90 across 2 seeds, clearly outside the ~46 Elo single-seed noise band —
+see [[gauntlet-seed-noise-finding]]) or Round 22 (+13, small but same-direction at both seeds),
+**this round's second seed showed literally zero difference**. The two before-runs and two
+after-runs used genuinely different binaries and produced visibly different games (confirmed:
+different first moves, different `md5sum`) — the identical W/D/L record at seed=4242 is a real
+coincidence of a bounded discrete outcome space at N=100, not a duplicate-run bug. The honest
+read: this round's true Elo effect is not reliably separable from noise at this sample size.
+
+**Decision: deployed anyway**, on the strength of what IS confirmed rather than the uncertain
+Elo number — nps is genuinely and robustly higher, correctness is thoroughly verified (bit-exact
+FT, tiny real-net eval drift, a lossy-comparison test with demonstrated teeth, an overflow guard
+that actually rejects unsafe nets), and across 600 total games there is no observed regression,
+crash, or negative Elo swing in either direction. This is a materially different confidence
+level than Rounds 21/22's deployments — flagged explicitly here and in PR #18's description
+rather than reported as a clean win.
+
+### Infrastructure note: an unnoticed environment restart during this round
+
+Mid-round, the sandbox environment restarted (confirmed via `uptime -s` showing a boot time
+minutes before the observation, vs `who -b`'s stale much-older record) while a background
+gauntlet pair was running via plain `nohum`+`disown`. Both processes died silently, leaving
+partial (47-48/100 games) truncated JSONL output with no error surfaced until directly
+inspected. Recovered by re-launching with `setsid` (full process-group detachment, more robust
+against a parent session teardown) and a `persistent: true` monitor, then re-ran both gauntlets
+from scratch (discarded the partial data rather than trying to merge it). No data was lost
+that mattered — the partial run was for the not-yet-reported second-seed confirmation — but this
+is a reminder that `nohup`+`disown` alone doesn't guarantee survival across every kind of
+session interruption; `setsid` is the more robust default for a background run expected to
+outlive the current shell.
+
+### Files changed this round
+
+* `src/nnue/mknn_evaluator.h` / `.cpp`, `tools/training/export_int16.py`,
+  `src/makruk/test_l2_quantization.cpp` (new), `src/makruk/test_nnue_incremental.cpp`,
+  `src/makruk/test_runner.cpp`, `src/makruk/build_tests.sh`, `.gitignore`, `src/evaluate.h`,
+  net swap `2020277415.bin` → `3769833465.bin` — via PR #18 (`l2-int16-quantization` → `main`)
