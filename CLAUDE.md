@@ -2960,3 +2960,90 @@ completed with zero crashes.
 No change needed — Round 21's fast-math fix was already deployed and is now confirmed, not
 just measured once. Comparison binaries (`src/sf-kernel-round20`, `src/sf-kernel-round21`)
 deleted as scratch cleanup after confirming results.
+
+## Round 22 — Heap-Allocation Elimination in MknnEvaluator::evaluate() (2026-08-29)
+
+### Motivation
+
+Round 21's fast-math fix closed most of the nps gap (~40K → ~150-190K) by fixing the L2/L3
+forward pass's dominant cost. Asked directly to continue closing the remaining gap with
+Fairy-SF-NNUE. Re-measured L2/L3 cost post-fast-math with temporary timing instrumentation
+(same pattern as Round 18): `avgFT_ns=3157, avgL2_ns=5595, avgL3Out_ns=386` — L2 dropped from
+32.6µs (Round 18) to 5.6µs, a ~5.8x reduction purely from Round 21's flags. Given this
+recalibration, offered the user two options and they chose the lower-risk one first: eliminate
+`evaluate()`'s remaining `std::vector` heap allocations (cheap, safe), then re-measure whether
+it's worth it before considering L2 weight quantization (bigger effort, uncertain payoff at
+this smaller remaining cost).
+
+### Implementation
+
+`src/nnue/mknn_evaluator.h`: new `MknnMaxL2=128`/`MknnMaxL3=128` compile-time caps (alongside
+the existing `MknnMaxL1=512`), and a `fastEvalOk_` flag computed at `load()` time — true
+whenever a net's `L1_`/`L2_`/`L3_` all fit within the caps (every net trained in this project
+so far qualifies, since every net uses L2=L3=32). `src/nnue/mknn_evaluator.cpp`: `evaluate()`
+now branches — when `fastEvalOk_`, a new `forwardPass()` helper does the L2/L3/out math using
+fixed-size stack buffers (zero heap allocation); a new `accumulateF32Into()` covers the rare
+VERSION1-with-small-L1 case for the fast path (every VERSION2 net within cap already goes
+through the Round 18 incremental accumulator instead). The original `std::vector`-based path
+is kept byte-for-byte unchanged as the fallback for any net exceeding the caps — no capability
+lost, only the allocation-avoidance optimization skipped for that (currently nonexistent) case.
+
+### Verification
+
+- Full test suite (188 NNUE bit-exact checks + 2165 SEE checks + all others): pass.
+- `perft 5`: unchanged, 6,223,994 nodes.
+- **Direct before/after comparison** (addresses a gap self-consistency tests can't catch — a
+  "consistently wrong" reordering would still pass a before-vs-itself test): built the
+  pre-refactor binary from committed HEAD in a worktree, added a temporary `nnueeval` debug UCI
+  command (`cout << int(Eval::evaluate(pos))`) to both binaries, diffed output across 18 diverse
+  positions and move sequences (openings, endgames, promotions, Khon/Met-heavy middlegames,
+  multi-hop incremental-accumulator chains) — **every value matched exactly, bit-for-bit**.
+  Temporary command reverted from both trees before committing (confirmed via `git status`/
+  `git diff` clean).
+- `tools/build_verify.sh`: clean (on the working branch where the script exists — see gap
+  finding below).
+- nps: `bench` command, node counts identical both runs (1,696,682) — confirms correctness
+  independent of the timing measurement. 254,108 → 270,215 nps (**+6.3%**). Single-position
+  `go movetime 3500` cross-check: ~203-205K → ~219-222K nps (depth 20-21), consistent.
+
+### Gauntlet result — small, real gain matching the modest nps change
+
+Same equal-condition format as every round since 18 (200 games, book-paired, 200ms both sides,
+seed=99, vs Fairy-Stockfish-NNUE):
+
+* Round 21 (previous baseline): 0W 66D 134L → Elo −282
+* Round 22 (heap allocation eliminated): 0W 70D 130L → Elo **−269**
+
+**+13 Elo.** Small and technically inside the demonstrated ~46 Elo single-seed noise band, but
+positive and proportionate to the measured nps gain (+6.3%, vs Round 21's ~4x nps gain that
+produced +64/+90 Elo) — the magnitude scaling roughly sensibly between the two rounds is a mild
+additional (not conclusive) signal this is real rather than pure noise. Deployed via PR.
+
+### Important process finding: `main` is missing Round 15-21 documentation and tooling
+
+While preparing this round's PR (based fresh on `origin/main`, following the PR #15
+precedent), discovered that PR #15 (`cpp-fixes-round18-21`) deliberately scoped to only 12
+C++ source files. As a result, `main` is currently **missing**:
+
+* `CLAUDE.md`'s Round 15 through Round 21 write-ups entirely (2,461 lines of diff) — the
+  version of this file on `main` predates the opening-book work, the true-strength-baseline
+  discovery, and every fix documented above it in this file.
+* `tools/build_verify.sh` (Round 17's standing verification gate) and
+  `tools/training/round17_crash_repro.sh`.
+* `tools/books/` (the fairy-stockfish/books opening books) and `gauntlet.py`'s book-pairing
+  support (Round 15 follow-up) — **the book-paired equal-condition gauntlet methodology used
+  for every Elo number from Round 16 onward does not exist on `main`.**
+* Several `tools/training/*.sh` pipeline scripts and `docs/dataset_guide.md`.
+
+This file (`CLAUDE.md`) and this session's own working directory are on
+`pr11-net-validation-decisive-data` (an old branch name, 65 commits ahead of `main`, 10 behind
+`origin/main`), which is where all of this actually lives. PR #16 (this round's change) was
+based on `origin/main` and flagged this gap in its description, but did not attempt to close
+it — that's a separate, larger cleanup (bring `CLAUDE.md`, `tools/build_verify.sh`,
+`tools/books/`, and `gauntlet.py`'s book support to `main` via their own PR) that hasn't been
+scoped or requested yet. Flagged for a future session/explicit request.
+
+### Files changed this round
+
+* `src/nnue/mknn_evaluator.h` / `.cpp` — the only files changed, via PR #16
+  (`nnue-eval-heap-refactor` → `main`)
