@@ -3166,3 +3166,106 @@ outlive the current shell.
   `src/makruk/test_l2_quantization.cpp` (new), `src/makruk/test_nnue_incremental.cpp`,
   `src/makruk/test_runner.cpp`, `src/makruk/build_tests.sh`, `.gitignore`, `src/evaluate.h`,
   net swap `2020277415.bin` → `3769833465.bin` — via PR #18 (`l2-int16-quantization` → `main`)
+
+## Round 24 — Search-Machinery Diff Audit: No Adaptation Bugs Found (2026-08-29)
+
+### Motivation
+
+After PR #17/#18 merged, nps closed to ~1.2-1.3x vs Fairy-Stockfish-NNUE (~367K vs ~450-475K).
+Asked to continue improving search. Applied the same diff-audit methodology that found the two
+real `seeGe()` bugs in Round 19-20: diff the Makruk-adapted files against `upstream`
+(`FireFather/sf-kernel`) looking for adaptation bugs, before assuming any parameter needs
+retuning.
+
+### Finding
+
+`src/search.cpp`, `search.h`, `movepick.cpp`, `movepick.h`, `timeman.cpp` are **byte-identical
+to upstream** — no diff at all. Unlike `position.cpp`/`evaluate.cpp`/SEE (genuinely Makruk-adapted
+code that had real bugs), the entire search machinery is an unmodified copy of chess-tuned
+Stockfish-derived code running as-is on Makruk. Checked the key integration points by hand and
+found them correctly wired: `pos.isDraw(ss->ply)` (search.cpp) correctly picks up the counting-draw
+fix from Round 11 automatically (since `isDraw()` itself was patched in `position.cpp`);
+`PawnValueMg` (the one piece-value reference in search.cpp) is the Makruk-calibrated 126, not a
+leftover chess value; `rule50Count()` is safely repurposed as a generic "position staleness"
+signal, not a draw trigger.
+
+**Conclusion: no bug to fix here.** The remaining opportunity is that these files carry
+generic chess-SPRT-tuned constants (pruning margins, LMR, null-move R, aspiration window) that
+may not fit Makruk's very different piece-value ratios (`types.h`: Rook:Pawn ≈10:1 here vs
+chess's own ≈5:1; Met/Queen-slot:Pawn ≈3.3:1 vs chess Queen:Pawn ≈9:1 — these are literally
+Stockfish's chess values relabeled onto Makruk piece roles, never retuned) and Makruk's longer,
+more zugzwang-prone endgame character (gauntlet logs routinely show 100-225 plies) — a
+fundamentally different, SPRT-scale kind of effort than the bug-fix rounds so far, with no
+single "fix" to verify the way SEE/NNUE changes had.
+
+### First test: null-move R, self-play (inconclusive)
+
+Tested `search.cpp`'s null-move pruning `R` formula
+(`Depth R=std::min(static_cast<int>(eval-beta)/147,5)+depth/3+4-(complexity>650);`), reducing
+the additive base by 1 (`+4`→`+3`, less aggressive pruning). Tested via 200-game **self-play**
+(new build vs old build). **Result: +3 Elo, 91% draws, only 18/200 decisive — statistically
+meaningless.** Discarded. Lesson: self-play between near-identical builds converges to draws far
+too easily to read a signal; the project's real Elo methodology (vs Fairy-Stockfish-NNUE) is
+needed even for search-parameter tests, not just net/eval changes.
+
+### Decision
+
+No code change. Proceed to Round 25's vs-Fairy-SF-NNUE retest of this and two further candidates.
+
+## Round 25 — Search-Parameter Tuning vs Fairy-Stockfish-NNUE: Three Candidates, All Discarded (2026-08-30)
+
+### Motivation
+
+Round 24 found no adaptation bug in search and an inconclusive self-play signal for null-move R.
+Planned (via plan mode, approved) a bounded, three-candidate sweep testing search constants
+against Fairy-Stockfish-NNUE directly — the methodology behind every real Elo number in this
+project — instead of self-play. Paced one candidate at a time with a check-in after each,
+per explicit instruction, rather than running the whole sweep autonomously.
+
+**Step 0 (baseline sanity check)**: before trusting the recorded Round 23 reference (-255 Elo,
+seed=99, N=200), ran a quick N=40 re-check of the unmodified `origin/main` binary. First attempt
+came back **-407 Elo** — traced to a real methodological mistake: a `make -j8` clean rebuild plus
+the full test suite was run *concurrently* with the gauntlet, competing for CPU against the
+movetime-based engines and starving both of real thinking time within their 200ms budgets. Killed
+the confound, reran clean (no concurrent work) → **-338 Elo**, still 83 Elo off -255 but within
+the plan's own "-350 floor" tolerance and attributable to N=40's small sample rather than drift.
+**Lesson generalized beyond "never run two gauntlets at once": never run any CPU-competing work
+(builds, test suites) concurrently with a movetime-based gauntlet at all** — any contention
+distorts effective search depth within a fixed time budget and taints the result.
+
+### Candidates tested (each: fresh branch off `origin/main`, one-line change, full
+`build_tests.sh` + `build_verify.sh` + `perft 5`=6,223,994 verification, then one 200-game
+gauntlet vs Fairy-Stockfish-NNUE, seed=99, before comparing against the -255 reference)
+
+1. **Null-move R retest** (`search.cpp:408`, `depth/3+4`→`depth/3+3`, same change as Round 24's
+   self-play test): **-260 Elo, delta -5.** Clean discard — agrees with the self-play result's
+   direction (nothing here), just without the earlier ambiguity.
+2. **LMR base constant** (`search.cpp:61`, `20.81`→`19.81`, ~4.8% less reduction at every node —
+   the most heavily chess-SPRT-mined constant in the file, given the smallest step size of the
+   three for exactly that reason): **-252 Elo, delta +3.** Clean discard.
+3. **Quiet-move SEE pruning margin** (`search.cpp:546`, `-25*lmrDepth²-20*lmrDepth` →
+   `-20*lmrDepth²-16*lmrDepth`, ~20% tighter — the candidate most directly tied to the
+   piece-value-ratio hypothesis, since this margin is consumed directly against `pos.seeGe()`'s
+   raw Makruk piece values): **-266 Elo, delta -11.** Clean discard.
+
+Per the pre-agreed decision criteria (delta ≤ -20 discards outright; delta ≥ +46 would need a
+confirming second seed; anything else defaults to discard unless positive in the +15 to +45
+range), **all three landed in the "doesn't matter" zone without needing a single second-seed
+confirmation** — a notably tight clustering (within 11 Elo of the reference each) that's more
+consistent with each change being genuinely inert than with a real effect hiding in noise across
+three independent draws.
+
+### Decision
+
+**No code changes deployed.** All three branches discarded (search.cpp reverted, branches
+deleted, scratch binaries removed) — nothing to PR. Recommendation for future sessions:
+single search-constant nudges of this magnitude (~5-20% relative change) are very unlikely to be
+where this engine's remaining Elo deficit lives. Don't default to a fourth single-constant
+candidate; either pursue a fundamentally different search change (a missing technique/extension,
+not a re-tuned existing constant) or shift priority to training-data/net-quality work (the
+original pre-C++-fixes "Next Development Priority" in this file, still not acted on).
+
+### Files changed this round
+
+None merged. Three branches created and discarded during testing:
+`search-tune-nullmove-r-v2`, `search-tune-lmr-base`, `search-tune-quiet-see-margin`.
