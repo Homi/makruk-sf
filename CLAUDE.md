@@ -3269,3 +3269,91 @@ original pre-C++-fixes "Next Development Priority" in this file, still not acted
 
 None merged. Three branches created and discarded during testing:
 `search-tune-nullmove-r-v2`, `search-tune-lmr-base`, `search-tune-quiet-see-margin`.
+
+## Round 26 — Unblocking Auto-Vectorization Closes the Remaining nps Gap Entirely (2026-08-30)
+
+### Motivation
+
+Asked to analyze what else could increase nps further. Grounded the investigation in four facts
+before picking a direction: (1) hardware caps SIMD at AVX2 (Haswell CPU, no AVX-512/VNNI), (2)
+`perf` is blocked in this sandbox (`perf_event_paranoid=4`) but `gprof` works, (3) PGO
+infrastructure exists in the Makefile, inherited from upstream, never used, (4) whether NNUE
+eval is still the dominant per-node cost hadn't been re-checked since the nps gap closed from
+~11-12x to ~1.2-1.3x. Planned (via plan mode) a measure-first, staged approach rather than
+guessing at the next lever.
+
+### Step 1: profile with `gprof` — eval is still 83.5% of CPU time
+
+Built a `-pg`-instrumented binary and ran `bench`. Flat profile: `MknnEvaluator::evaluate()`
+42.27%, `MknnEvaluator::updateAccumulator()` 41.21% — **83.5% combined**. NNUE eval is nowhere
+near played out; the assumption behind Steps 2-4 of the original plan (PGO, `bench.h` fix) was
+reordered on the spot in favor of digging into `updateAccumulator()` directly, per direct
+instruction after seeing this result.
+
+### Step 2: diagnose `updateAccumulator()` — the algorithm is fine, the primitives aren't
+
+Added counter instrumentation (fast-path hits, incremental-path hop counts, full-refresh
+fallbacks and their trigger reasons) and re-ran `bench`:
+
+```
+total=2,034,666  fastPath=0.3%  incremental=98.3% (avgHops=1.35)  fullRefresh=1.4%
+stop reasons: requiresRefresh(king move)=22172  budget=73  maxChain=0  root=6078
+```
+
+Round 18's incremental algorithm is working exactly as designed — almost every call takes a
+single-hop replay, full refreshes are rare and legitimate (king moves, root). The 41.2% cost is
+real arithmetic work in `addColumn()`/`subColumn()`, not algorithmic waste.
+
+### Step 3: found the actual bug — a vectorization-blocking loop bound
+
+Checked GCC's vectorization report (`-fopt-info-vec-missed`) for `addColumn()`/`subColumn()`/
+`refreshInto()`'s inner loops (`for (int i = 0; i < L1_; ++i) ...`): **"couldn't vectorize
+loop" / "number of iterations cannot be computed."** `L1_` is a runtime (non-`const`) class
+member — the compiler cannot prove it as a stable loop-invariant trip count directly, so the
+loop compiles fully scalar despite `-mavx2` being available and the loop itself being a
+textbook auto-vectorizable pattern (independent elementwise int16→int32 widen-add, no
+reduction, nothing like Round 21's serial-dependency-chain issue). Confirmed the other L2/L3/out
+loops in `forwardPass()` were unaffected (LTO const-propagates `L1_` through those call sites
+fine) — this was specific to `addColumn`/`subColumn`, called out-of-line from
+`updateAccumulator()`'s per-hop loop.
+
+**Fix**: cache `L1_` into a local `const int L1` before each loop (3 sites:
+`addColumn`/`subColumn`/`refreshInto`). Re-checked with `-fopt-info-vec-optimized`: now
+vectorizes with 32-byte (AVX2) vectors. Purely a compiler hint — zero semantic change.
+
+### Verification
+
+- Full test suite (188 NNUE bit-exact checks + 2165 SEE checks + all others): pass, unchanged
+  — expected, since this is bit-exact integer arithmetic with no behavior change.
+- `perft 5`: unchanged, 6,223,994 nodes.
+- **nps** (`bench`, node counts identical both runs — 2,591,709, confirming zero behavioral
+  change): 368,821 → 526,342 (**+42.7%**), clean side-by-side rebuild of both binaries.
+  **This closes the remaining nps gap with Fairy-Stockfish-NNUE entirely** — nps now meets or
+  exceeds Fairy-SF-NNUE's own (~450-475K), down from an ~11-12x deficit at the start of Round
+  21.
+
+### Gauntlet result
+
+Same equal-condition format as every round since 18: 200 games, book-paired, 200ms both sides,
+seed=99, vs Fairy-Stockfish-NNUE. **-255 → -260 Elo (delta -5).** Same pattern as Round 23:
+a large, real, independently-verified nps gain that did not translate into a measurable Elo
+gain — the engine already searches deep enough at 200ms/move that additional nodes aren't
+changing move quality. Unlike Round 23, though, this change carries zero correctness risk or
+format change to weigh against the flat Elo result: it is a pure, bit-exact
+compiler-vectorization fix.
+
+### Decision
+
+**Deployed** via PR #19 (`nnue-accumulator-vectorization-fix` → `main`), merged. Confirms the
+pattern first seen in Round 23: **nps is no longer predictive of Elo at this engine's current
+search depth.** Two consecutive large nps wins (+34%, +42.7%) with combined ~0 net Elo movement
+is strong evidence the next real lever for strength is evaluation/training quality, not further
+engine-speed work — matches the standing recommendation from Round 25 to pivot toward
+training-data/net-quality work (the original pre-C++-fixes "Next Development Priority" in this
+file, still not acted on).
+
+### Files changed this round
+
+* `src/nnue/mknn_evaluator.h` — no changes.
+* `src/nnue/mknn_evaluator.cpp` — the only file changed, via PR #19
+  (`nnue-accumulator-vectorization-fix` → `main`).
