@@ -169,6 +169,57 @@ static Score kingSafety(const Position& pos, Color c) {
 }
 
 // ---------------------------------------------------------------------------
+// EXPERIMENTAL: central-control bonus for Khon (BISHOP) and Met (QUEEN).
+//
+// Makruk promotes a pawn to Met only (no separate "promoted pawn" piece
+// type exists on the board -- a promoted pawn IS a QUEEN-slot piece,
+// indistinguishable from an original Met), so rewarding QUEEN-slot pieces
+// here already covers "โคน เม็ด และเบี้ยหงาย" (Khon, Met, and promoted
+// pawns) with no separate case needed for the third.
+//
+// Rewards occupying (relative to each side, mirrored for Black):
+//   rank 5: d5, e5                      -- tier 0 (highest)
+//   rank 4: c4, d4, e4, f4              -- d/e tier 0, c/f tier 1
+//   rank 3: b3, c3, d3, e3, f3, g3      -- d/e tier 0, c/f tier 1, b/g tier 2
+// i.e. a widening cone from the own advance rank (3) narrowing toward the
+// board's center (5), with center files (d/e) valued highest, then c/f,
+// then b/g. Deliberately larger than this file's other positional bonuses
+// (rookActivity ~10-20, kingSafety ~10/pawn) so the effect is clearly
+// observable/comparable in gauntlet testing -- an experimental heuristic
+// to measure impact, not a tuned final value. MG-only: central control is
+// a middlegame concept; the endgame is already governed by the mop-up
+// heuristics below.
+static int centralZoneBonus(const Square sq, const Color c) {
+    constexpr int Tier0 = 40;  // d, e
+    constexpr int Tier1 = 25;  // c, f
+    constexpr int Tier2 = 12;  // b, g
+
+    // Normalize to White's perspective (flip rank for Black).
+    const Square rel = (c == WHITE) ? sq : Square(static_cast<int>(sq) ^ 56);
+    const File f = fileOf(rel);
+    const Rank r = rankOf(rel);
+
+    const bool isDE = (f == FILE_D || f == FILE_E);
+    const bool isCF = (f == FILE_C || f == FILE_F);
+    const bool isBG = (f == FILE_B || f == FILE_G);
+
+    if (r == RANK_5) return isDE ? Tier0 : 0;
+    if (r == RANK_4) return isDE ? Tier0 : isCF ? Tier1 : 0;
+    if (r == RANK_3) return isDE ? Tier0 : isCF ? Tier1 : isBG ? Tier2 : 0;
+    return 0;
+}
+
+static Score centralControl(const Position& pos, Color c) {
+    Score s = SCORE_ZERO;
+    uint64_t pieces = pos.pieces(c, BISHOP) | pos.pieces(c, QUEEN);  // Khon + Met
+    while (pieces) {
+        const Square sq = popLsb(pieces);
+        s += static_cast<int>(S(centralZoneBonus(sq, c), 0));
+    }
+    return s;
+}
+
+// ---------------------------------------------------------------------------
 // Endgame recognition and mop-up evaluation
 // ---------------------------------------------------------------------------
 // In Makruk all non-rook pieces move only one step, so without endgame
@@ -335,6 +386,7 @@ Value makrukClassicalEval(const Position& pos) {
     for (Color c : {WHITE, BLACK}) {
         add(score, rookActivity(pos, c), c);
         add(score, kingSafety(pos, c), c);
+        add(score, centralControl(pos, c), c);
     }
 
     // Bare-king endgame handling: at most one side can be bare at a time.
@@ -369,12 +421,14 @@ std::string makrukEvalReport(const Position& pos) {
     Score matPST = evalMaterialAndPST(pos);
     Score rookBonus = SCORE_ZERO;
     Score kingBonus = SCORE_ZERO;
+    Score centralBonus = SCORE_ZERO;
     Score mopup     = SCORE_ZERO;
     const char* egDesc = "none";
 
     for (Color c : {WHITE, BLACK}) {
         add(rookBonus, rookActivity(pos, c), c);
         add(kingBonus, kingSafety(pos, c), c);
+        add(centralBonus, centralControl(pos, c), c);
     }
 
     for (Color stronger : {WHITE, BLACK}) {
@@ -402,6 +456,7 @@ std::string makrukEvalReport(const Position& pos) {
         static_cast<int>(matPST)   +
         static_cast<int>(rookBonus) +
         static_cast<int>(kingBonus) +
+        static_cast<int>(centralBonus) +
         static_cast<int>(mopup)
     );
     if (egDesc == std::string("draw (insufficient material)"))
@@ -417,6 +472,7 @@ std::string makrukEvalReport(const Position& pos) {
     ss << "  material+pst   : mg=" << mgValue(matPST)    << " eg=" << egValue(matPST)    << "\n";
     ss << "  rook activity  : mg=" << mgValue(rookBonus)  << " eg=" << egValue(rookBonus)  << "\n";
     ss << "  king safety    : mg=" << mgValue(kingBonus)  << " eg=" << egValue(kingBonus)  << "\n";
+    ss << "  central control: mg=" << mgValue(centralBonus) << " eg=" << egValue(centralBonus) << "\n";
     ss << "  mop-up         : mg=" << mgValue(mopup)      << " eg=" << egValue(mopup)      << "\n";
     ss << "  total          : mg=" << mgValue(total)      << " eg=" << egValue(total)      << "\n";
     ss << "  blended        : " << blended << " cp (white)\n";

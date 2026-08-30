@@ -92,6 +92,33 @@ static void testCentralKhonScoresHigher() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 5b: central-control zone bonus is correctly tiered by file
+// (d/e > c/f > b/g > outside the zone), for a Met (QUEEN-slot piece).
+// Note: Makruk promotes a pawn to Met only -- there is no separate
+// "promoted pawn" PieceType on the board, a promoted pawn IS a QUEEN-slot
+// piece indistinguishable from an original Met -- so this single test
+// covers "Met and promoted pawns" together by construction, not by a
+// separate code path.
+// ---------------------------------------------------------------------------
+static void testCentralControlTieredByFile() {
+    const std::string name = "testCentralControlTieredByFile";
+    auto evalMetOn = [](const std::string& fileRank) {
+        Position pos; StateListPtr st;
+        setPos(pos, st, "4k3/8/8/8/8/" + fileRank + "/8/4K3 w - - 0 1");
+        return makrukClassicalEval(pos);
+    };
+    const Value vA3 = evalMetOn("M7");   // outside the zone -> 0
+    const Value vB3 = evalMetOn("1M6");  // tier 2
+    const Value vC3 = evalMetOn("2M5");  // tier 1
+    const Value vD3 = evalMetOn("3M4");  // tier 0
+
+    assert(vB3 > vA3 && "Met on b3 (tier 2) must score higher than a3 (outside zone)");
+    assert(vC3 > vB3 && "Met on c3 (tier 1) must score higher than b3 (tier 2)");
+    assert(vD3 > vC3 && "Met on d3 (tier 0) must score higher than c3 (tier 1)");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
 // Test 6: makrukEvalReport includes rook activity section.
 // ---------------------------------------------------------------------------
 static void testRookOpenFileBonusInReport() {
@@ -256,6 +283,7 @@ void runMakrukEvalTests() {
     testKhonValueIsCorrect();
     testMetValueIsCorrect();
     testCentralKhonScoresHigher();
+    testCentralControlTieredByFile();
     testRookOpenFileBonusInReport();
     testSymmetricPositionIsZero();
     testEvalFlipsForBlack();
