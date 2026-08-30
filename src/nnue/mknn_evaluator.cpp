@@ -23,21 +23,37 @@ void MknnEvaluator::refreshInto(const Nebula::Position& pos, const Color persp,
     using Features::HalfKAv2Makruk;
     HalfKAv2Makruk::IndexList active;
     HalfKAv2Makruk::appendActiveIndices(pos, persp, active);
-    for (int i = 0; i < L1_; ++i)
+    const int L1 = L1_;  // see addColumn()'s comment: unblocks auto-vectorization
+    for (int i = 0; i < L1; ++i)
         dst[i] = static_cast<std::int32_t>(ft_bias_i16_[i]);
     for (const auto idx : active)
         addColumn(idx, dst);
 }
 
+// L1_ is a runtime (non-const) member: using it directly as a loop bound
+// gives GCC's vectorizer "number of iterations cannot be computed" (confirmed
+// via -fopt-info-vec-missed) and the loop compiles fully scalar. These are
+// the hottest per-hop primitives in updateAccumulator()'s incremental path --
+// gprof profiling (Round 26) found evaluate()+updateAccumulator() together
+// account for ~83.5% of total CPU time, with updateAccumulator() alone at
+// ~41.2%, almost entirely attributable to addColumn/subColumn once accounted
+// for LTO inlining (confirmed: 98.3% of updateAccumulator() calls take the
+// incremental path, averaging just 1.35 hops -- the algorithm itself is
+// working exactly as designed; the cost is these two loops' own arithmetic).
+// Caching L1_ into a local const int gives the vectorizer a stable,
+// analyzable trip count and the loop vectorizes with 32-byte (AVX2) vectors
+// instead. See CLAUDE.md Round 26 for the measured impact.
 void MknnEvaluator::addColumn(const IndexType idx, std::int32_t* dst) const {
-    const int16_t* col = ft_weight_i16_.data() + idx * L1_;
-    for (int i = 0; i < L1_; ++i)
+    const int L1 = L1_;
+    const int16_t* col = ft_weight_i16_.data() + idx * L1;
+    for (int i = 0; i < L1; ++i)
         dst[i] += static_cast<std::int32_t>(col[i]);
 }
 
 void MknnEvaluator::subColumn(const IndexType idx, std::int32_t* dst) const {
-    const int16_t* col = ft_weight_i16_.data() + idx * L1_;
-    for (int i = 0; i < L1_; ++i)
+    const int L1 = L1_;
+    const int16_t* col = ft_weight_i16_.data() + idx * L1;
+    for (int i = 0; i < L1; ++i)
         dst[i] -= static_cast<std::int32_t>(col[i]);
 }
 
