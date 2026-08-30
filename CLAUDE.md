@@ -199,8 +199,8 @@ When working in this repository:
 * **Next priority** (flagged repeatedly, not yet acted on): training-data/net-quality work, not
   more engine speed or search-parameter tuning — Round 25 exhausted 3 well-reasoned
   search-constant candidates with no signal; Round 26 confirmed nps has plateaued as a lever.
-* **Open/paused**: a central-control classical-eval experiment (Khon/Met, see below) is
-  mid-flight on branch `classical-eval-central-control`, paused pending a machine restart.
+* **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
+  inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
   reproduced despite ~1500+ invocations across two investigation rounds (10, 17); hardened
   defensively (aborts with a diagnostic instead of segfaulting) but root cause unknown.
@@ -377,7 +377,7 @@ delta -5) — deployed anyway (zero correctness risk, unlike Round 23). Two cons
 wins with ~0 combined Elo (Round 23 + Round 26) is strong evidence the next real lever is
 eval/training quality, not engine speed.
 
-### Central-Control Eval Experiment (2026-08-30, paused mid-flight)
+### Central-Control Eval Experiment — Concluded Inconclusive, Not Merged (2026-08-30)
 
 Added `centralControl()` to `makruk_eval.cpp`: an MG-only bonus for Khon (BISHOP) and Met
 (QUEEN — which automatically covers promoted pawns too, since Makruk promotes to Met only with
@@ -388,10 +388,15 @@ file's other bonuses so the effect would be observable). Verified square-by-squa
 `testCentralControlTieredByFile` added.
 
 Gauntlet result: **inconclusive** — seed=99 gave +11 Elo, seed=4242 gave -21 Elo (sign flip).
-Per the standing decision criteria (see "Key Methodological Findings"), not deployed. Work is
-committed and pushed on branch `classical-eval-central-control` (not merged), paused for a
-machine restart. Natural next steps: different tier values/zone shape, extending to EG, or a
-different heuristic entirely.
+Per the standing decision criteria (see "Key Methodological Findings"), not deployed.
+
+**Closed out (not pursued further) rather than iterated on.** Work is committed and pushed on
+branch `classical-eval-central-control` (commit `b9da620`, not merged) — kept on GitHub for
+reference, not deleted, in case the tier values/zone shape are worth revisiting later. If
+resumed: candidates are different tier values/zone shape, extending the bonus to EG (currently
+MG-only), or a different heuristic shape entirely — but per "Key Methodological Findings,"
+any resumption should budget for a proper 2-seed test before trusting a first result, the same
+mistake-cost this round already paid once.
 
 ---
 
