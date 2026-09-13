@@ -182,24 +182,31 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 27, 2026-09-13)
+## Current Status (as of Round 28, 2026-09-14)
 
-* **Embedded net**: `src/3587509696.bin` (Round 27, trained on fresh training data from the
-  post-Round-26 engine). Check `src/evaluate.h`'s `NnueNetDefaultName` for what's actually
-  shipped at any given time, this note can drift.
+* **Embedded net**: `src/3587509696.bin` (still Round 27 — Round 28 was inconclusive, not
+  deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for what's actually shipped at any
+  given time, this note can drift.
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
-  true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27. Rounds
-  18-26 were engine-side fixes (incremental NNUE fix, two real `seeGe()` bugs, fast-math,
-  heap-alloc elimination, L2 quantization, a vectorization-blocking bug fix); two consecutive
-  large nps wins there (Round 23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing
-  the nps gap with Fairy-Stockfish-NNUE entirely but confirming nps had plateaued as a lever.
-  Round 27 then pivoted to training-data quality (regenerating data with the now-much-faster,
-  tactically-correct engine) and delivered **+55/+60 Elo, confirmed at 2 seeds** — the first
-  round in a long time to move the needle by more than single-digit/noise-band amounts.
-* **Next priority**: continue the training-data-quality direction that just paid off in Round
-  27 — e.g. further recalibrating handicap configs, or scaling up the Round 27 recipe with more
-  games, following the same validated-then-scaled pattern as Rounds 11→13→14.
+  true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
+  there through Round 28 (inconclusive, not deployed). Rounds 18-26 were engine-side fixes
+  (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
+  quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
+  23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
+  Fairy-Stockfish-NNUE entirely but confirming nps had plateaued as a lever. Round 27 then
+  pivoted to training-data quality and delivered **+55/+60 Elo, confirmed at 2 seeds**. Round
+  28 tried scaling that same recipe 3× further and came back sign-flipped/inconclusive despite
+  a *better* blend-range acceptance rate and the largest single-round dataset addition yet —
+  more data of the same kind is not a guaranteed lever past a certain point.
+* **Next priority**: per Round 28's own conclusion, the next attempt at improving Elo should
+  try a different lever rather than a third straight data-volume scale-up — candidates
+  analyzed but not yet started: re-tuning the classical/NNUE blend gate (±100cp/300cp, unchanged
+  since Round 7, set for a much weaker net) now that net quality has improved; a larger NNUE L1
+  (untested at Elo level, and nps headroom now exists post-Round-26); or backporting newer
+  Stockfish search techniques (`correctionHistory`/`pawnHistory`/`lowPlyHistory` — confirmed
+  absent from this codebase's search.cpp, and a likely real generational gap vs
+  Fairy-Stockfish's much more current search) — highest-effort, highest-risk of the three.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -382,6 +389,47 @@ band. Deployed via PR #20. First round in a long time to beat single-digit/noise
 a spurious 100%-draw/Elo-0 reading on *both* nets — see "Key Methodological Findings" above.
 Caught via a same-flags control run before deploying on the bad reading.
 
+### Round 28 — Scaling Up Round 27's Recipe: Inconclusive, Not Deployed (2026-09-14)
+
+Direct follow-up to Round 27's own recommended next step (scale up the recalibrated
+`movetime-a=30/depth-b=4` config, matching the Round 11→13→14 validate-then-scale pattern).
+Generated 450 games (3× Round 27's Config D) at that exact config, teacher-labeled with
+Fairy-SF depth=10 → 37,275 scored, filtered to blend range: **67.6% acceptance** — notably
+*higher* than Round 27's 53.1%, and the largest single-round dataset addition in this
+project's history (267,971→293,161 positions, +9.4%). `dataset_summary.py` found nothing
+unhealthy (0.3% duplication, improved Black-win share 9.3%). Trained 60 epochs, standard
+recipe. Best epoch 59, val_loss **0.555746** — slightly *worse* than Round 27's 0.553515,
+despite the better acceptance rate and larger dataset (another data point for "val_loss
+doesn't predict Elo," this time in the opposite direction from usual: more/better-filtered
+data didn't even improve val_loss, let alone Elo).
+
+**Gauntlet, confirmed at 2 seeds — sign-flipped, inconclusive:**
+
+| Seed | Round 28 | Round 27 (ref) | Delta |
+|---|---|---|---|
+| 99 | 0W 89D 111L → -217 | -205 | -12 |
+| 4242 | 0W 97D 103L → -198 | -200 | +2 |
+
+The two seeds disagree in direction (-12 vs +2) — per the standing decision criteria, this is
+**inconclusive, not a small effect**, unlike Round 27 where both seeds agreed within 5 Elo.
+**Not deployed.** Reverted cleanly (`src/evaluate.h` never left `3587509696.bin` on the
+tracked branch; the working branch was discarded unpushed). Checkpoint
+`tools/training/makruk_round28.pt` (val_loss 0.555746) kept on disk, gitignored, for possible
+future ablation — same treatment as Round 12/15/16.
+
+**Takeaway**: a higher blend-range acceptance rate and a bigger dataset addition do not
+automatically transfer to Elo — consistent with, and now the second reminder of, this
+project's core finding that raw data-quality metrics (acceptance %, duplication %, val_loss)
+are necessary-but-not-sufficient; the gauntlet is still the only real signal. Round 27's win
+may have been closer to the ceiling of what this specific config/scale can deliver, or Round
+28 may simply be within the "further recalibration has diminishing returns" territory flagged
+back in Round 27's own calibration probes. Either way, blindly scaling a working recipe is not
+guaranteed to keep working — this doesn't invalidate Round 27's result (still deployed,
+still 2-seed-confirmed), it just means the next attempt at this direction should try a
+different lever (different config mix, or one of the other three options from the Round 27
+follow-up analysis: blend gate/cap re-tuning, larger NNUE L1, or backporting newer Stockfish
+search techniques) rather than a third straight data-volume scale-up.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -396,6 +444,7 @@ Caught via a same-flags control run before deploying on the bad reading.
 | Round 23 (VERSION3 int16 L2 quantization, +34% nps) | ~-254 (pooled) | ~+15 | Elo gain not reliably confirmed (sign-inconsistent across seeds); deployed on nps+correctness grounds |
 | Round 26 (vectorization fix, +42.7% nps) | -260 | -5 (flat) | nps gap with Fairy-SF-NNUE now fully closed; deployed (zero risk) |
 | Round 27 (fresh training data, recalibrated handicaps) | -205/-200 | **+55/+60** | confirmed at 2 seeds (5 Elo apart); first round in a long time to beat single-digit/noise |
+| Round 28 (3× scale-up of Round 27's recipe) | -217/-198 | -12/+2 | sign-flipped across seeds — inconclusive, not deployed; net stayed on Round 27 |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
@@ -407,6 +456,9 @@ to this table — different methodology, not true strength. See "Key Methodologi
 * `src/3587509696.bin` — Round 27 VERSION3/MKN3 (int16 L2), fresh training data from the
   post-Round-26 engine, Elo -205/-200 (2-seed confirmed, +55/+60 over Round 26) — **currently
   embedded** (verify against `src/evaluate.h`, this can drift)
+* `tools/training/makruk_round28.pt` — Round 28 checkpoint (3× scale-up of Round 27's recipe),
+  val_loss 0.555746, Elo -217/-198 (2-seed, sign-flipped/inconclusive), not deployed,
+  gitignored, kept for potential future ablation
 * `src/3769833465.bin` — Round 23 VERSION3/MKN3 (int16 L2), archived
 * `src/2020277415.bin` — Round 14 net, MKN2 int16, L1=512 — same underlying weights as
   3769833465.bin before L2 quantization, archived
