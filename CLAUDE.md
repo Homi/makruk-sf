@@ -259,180 +259,112 @@ read before starting new tuning/benchmarking work.
 
 ## Development History
 
-### Training pipeline era (net/data quality work, before the C++ correctness pivot)
+### Training pipeline era (pre-Round-17, foundational bugs — historical reference)
 
-Initial proof-of-concept (110 self-play games, all draws, val_loss 0.67) established the
-pipeline works but the data was too draw-heavy to teach real signal. PR11 added the core
-tooling still in use today: `tools/gauntlet.py`, `tools/selfplay/selfplay.py`'s handicap
-modes, `tools/training/convert.py`/`dataset_summary.py`, `docs/dataset_guide.md`. A cascade of
-early bugs were found and fixed in sequence — each blocking meaningful net evaluation until
-fixed:
+PR11 added the core tooling still in use today: `tools/gauntlet.py`, `tools/selfplay/
+selfplay.py`'s handicap modes, `tools/training/convert.py`/`dataset_summary.py`. A cascade of
+bugs was found and fixed, each blocking meaningful net evaluation until resolved:
 
-1. **Counting draw never wired into game logic** → 66% stalemate rate in gauntlets. Fixed by
-   connecting `isDraw()` to `isMakrukCountingDraw()`.
-2. **0% decisive self-play** even with handicaps, because counting-draw endgames score ≈0
-   regardless of material. Fixed with **score adjudication** (`--adjudication-threshold`/
-   `--adjudication-streak` in `selfplay.py` and `gauntlet.py`) — a sustained ≥500cp streak
-   after ply 20 ends the game. Decisive rate: 0% → 65-80%.
-3. **`gauntlet.py`'s draw detection never fired** (`sc == 0` exact-match against a value that's
-   never exactly zero) → 61-67% spurious stalemates even after the counting fix. Fixed with a
-   tolerance-based per-engine streak check; stalemate rate dropped to ~1%.
-4. **NNUE was never loading at all** — wrong magic-number check meant `MknnEvaluator` silently
-   fell back to classical eval every game. *Every gauntlet Elo number before this fix measured
-   classical eval, not NNUE.* Fixed by writing a purpose-built `MknnEvaluator` reading the
-   project's own MKNN format directly.
-5. Once NNUE was actually active, it was a **-471 Elo regression** vs classical (-108 vs
-   +363), from three compounding bugs: (a) a wrong sigmoid-decode formula compressing large
-   scores, (b) CReLU/ReLU mismatch between training and inference, (c) training labels
-   compressed toward 0 in counting-draw endgames so the net never learned material scale.
-   Fixing the decode formula, matching CReLU exactly, and adding `--color-augment` +
-   imbalanced-opening self-play data (`decisive_v3`/`v4`, `imbalanced_fens.txt`) closed the
-   gap: NNUE blend eventually matched (Round 6-7, `evaluate.cpp`'s gate/cap blend formula:
-   `classical + clamp(nnue - classical, -100, 100)`, gate 300cp) and then modestly beat
-   (Round 8, +25 Elo over pure classical) classical-only play.
-6. **Pure NNUE (no classical blend) was never viable** in any training configuration tried —
-   every attempt (Round 7's v6, Round 9's score-scaled v8) underestimated material by ~2× or
-   overcorrected into a different failure mode (v8: equal positions inflated to +150cp,
-   Elo -301). The underlying cause (Round 9, confirmed in Round 10): Makruk counting draw
-   compresses Fairy-Stockfish teacher labels to ≈0 in endgames, so the net never sees large,
-   unambiguous material-advantage examples during training. A `UseCounting` UCI option /
-   `--no-counting` selfplay flag (Round 10) let training data generation disable counting to
-   get real material-scale labels — this is training-data-generation-only, never for real
-   play/gauntlets.
-7. **A depth≥9 SIGSEGV** was discovered while generating counting-unaware data (Round 10) —
-   root cause never confirmed despite ~1500 reproduction attempts across two rounds (10, 17);
-   hardened defensively (`ValueList::pushBack` and `Position::setCheckInfo` now abort with a
-   diagnostic instead of reading out-of-bounds) and `tools/build_verify.sh` added as a standing
-   crash-probe gate. `selfplay.py --strong-depth` remains the only confirmed-effective
-   mitigation for data generation.
+* Counting draw never wired into game logic → 66% stalemate rate. Fixed by connecting
+  `isDraw()` to `isMakrukCountingDraw()`.
+* 0% decisive self-play even with handicaps (counting-draw endgames score ≈0 regardless of
+  material). Fixed with **score adjudication** (`--adjudication-threshold`/`-streak` in
+  `selfplay.py`/`gauntlet.py` — a sustained ≥500cp streak after ply 20 ends the game).
+  Decisive rate 0%→65-80%.
+* `gauntlet.py`'s draw detection used exact `sc==0` (never true) → 61-67% spurious stalemates.
+  Fixed with a tolerance-based per-engine streak check.
+* NNUE was never actually loading (wrong magic-number check, silent fallback to classical) —
+  *every gauntlet number before this fix measured classical eval, not NNUE.* Fixed with a
+  purpose-built `MknnEvaluator`.
+* Once active, NNUE was a **-471 Elo regression** vs classical, from 3 compounding bugs: wrong
+  sigmoid-decode formula, CReLU/ReLU train/inference mismatch, and counting-compressed training
+  labels (net never learned material scale). Fixed by correcting decode/CReLU and adding
+  `--color-augment` + imbalanced-opening data; NNUE blend eventually matched then modestly beat
+  (Round 8, +25 Elo) classical-only play. Blend formula since Round 7:
+  `classical + clamp(nnue - classical, -100, 100)`, gate 300cp.
+* **Pure NNUE (no classical blend) was never viable** in any config tried — underestimates
+  material ~2× or overcorrects. Root cause: Makruk counting draw compresses teacher labels to
+  ≈0 in endgames, so the net never sees unambiguous material-advantage examples. `UseCounting`
+  UCI option / `--no-counting` selfplay flag lets data-gen disable counting for real
+  material-scale labels — **data-generation only, never for real play/gauntlets.**
+* A depth≥9 SIGSEGV surfaced while generating counting-unaware data — never confirmed
+  reproducible despite ~1500 attempts across 2 rounds; hardened defensively (abort with a
+  diagnostic instead of an OOB read) rather than "fixed". `selfplay.py --strong-depth` is the
+  only confirmed-effective mitigation.
 
-**Net-quality rounds 11-16**: closer-handicap self-play (opponent depth 4-5 instead of the
-full-strength baseline) proved an efficient way to harvest "blend-range" (near-equal position)
-training data — 84-87% acceptance vs the original method's 63.5%. One scale-up attempt (Round
-12) regressed sharply; an ablation (Round 13, reusing already-labeled data, no new games)
-confirmed the closest-handicap config (depth-b=5, nearest genuine parity) was the cause —
-noisier labels near true equality diluting signal despite passing the blend-range filter by
-score alone. Rounds 13-14 then scaled the *validated-good* configs cleanly, holding or
-improving each time. Round 15 appeared to regress sharply (+127 vs +173) but a follow-up
-seed-variance investigation found this was mostly the 46-Elo single-seed noise described above,
-not a real regression — which directly motivated adding opening-book pairing (`tools/books/`,
-Round 15 follow-up) to shrink that noise band. Round 16, the first book-paired round, came back
-genuinely inconclusive (opposite-signed deltas at two seeds) and was correctly not deployed.
+**Net-quality rounds 11-16**: closer-handicap self-play (opponent depth 4-5) harvested
+"blend-range" (near-equal) training data far more efficiently (84-87% acceptance vs 63.5%). A
+scale-up (Round 12) regressed sharply; an ablation (Round 13) isolated the closest-handicap
+config (depth-b=5, nearest genuine parity) as the cause — noisier near-parity labels dilute
+signal despite passing the score filter. Rounds 13-14 scaled the validated-good configs
+cleanly. Round 15's apparent regression was mostly the 46-Elo single-seed noise described
+below — motivated adding opening-book pairing (`tools/books/`). Round 16, the first
+book-paired round, was genuinely inconclusive (sign-flipped across seeds) and not deployed.
 
-### C++ correctness/performance era (Rounds 17-26, current main development thrust)
+### C++ correctness/performance era (Rounds 17-26)
 
-**Round 17** (2026-08-22): re-investigated the unfixed SIGSEGV — still unreproduced after a
-further ~150-game bounded attempt. Added `tools/build_verify.sh` as a standing post-build gate.
+* **17** (08-22): SIGSEGV re-investigated, still unreproduced. Added `tools/build_verify.sh`.
+* **18** (08-22): First true equal-condition (no-handicap) test — baseline is **-372 Elo**, not
+  the historical +111/+382 (all handicap-gauntlet artifacts). Root cause: `MknnEvaluator`
+  recomputed its NNUE accumulator from scratch every call. Fixed with `MknnAccumulator`/
+  `updateAccumulator()` (incremental, bit-exact vs from-scratch, 188 checks). -372→-359.
+* **19-20** (08-22/23): Diffed against upstream, found 2 real `seeGe()` bugs — wrong Khon/Met
+  attacker detection (chess-style slider union instead of the correct reverse-color/non-slider
+  formula) and an attacker-check order inherited from chess's value order instead of Makruk's
+  (Pawn<Met<Khon<Knight<Rook). Both fixed, 2165-check regression test (`test_see.cpp`).
+  -359→-346.
+* **21** (08-23): Closed most of the nps gap — GCC's auto-vectorizer left the L2 reduction loop
+  scalar without float-reassociation permission (not a SIMD-width problem). Added a scoped
+  fast-math subset to `mknn_evaluator.cpp`; also fixed the Makefile's bad default ARCH
+  (`x86-64-modern`→`x86-64-bmi2`). nps ~40K→~150-190K (~4×). -346→-282 (**+64 Elo**, confirmed
+  +90 at a 2nd seed — largest single-round gain in this project's history).
+* **22** (08-29): Eliminated remaining heap allocations in `evaluate()` via fixed-size stack
+  buffers. nps +6.3%. -282→-269 (+13).
+* **23** (08-29): VERSION3 (MKN3) int16-quantized L2, with a load()-time overflow-safety check.
+  nps +34%. Elo inconclusive (+14/+0 across 2 seeds) — deployed on nps+correctness grounds
+  alone, flagged as lower-confidence than 21/22.
+* **24-25** (08-29/30): `search.cpp`/`movepick.cpp`/`timeman.cpp` confirmed byte-identical to
+  upstream. Tested 3 search-constant candidates (null-move R, LMR base, quiet SEE margin) — all
+  within 11 Elo of baseline, all discarded.
+* **26** (08-30): `gprof` profiling found eval still 83.5% of CPU time. Root cause:
+  `addColumn`/`subColumn`/`refreshInto` used a runtime member (`L1_`) directly as a loop bound,
+  blocking GCC auto-vectorization ("number of iterations cannot be computed"). 3-line fix
+  (cache to a local `const int`). nps +42.7%, bit-exact (identical node counts). Elo flat
+  (-260, delta -5) — deployed anyway (zero correctness risk). Two consecutive large nps wins
+  (23+26) with ~0 combined Elo confirmed nps had plateaued as a lever.
 
-**Round 18** (2026-08-22): asked to test without any handicap for the first time —
-revealed the **true baseline is -372 Elo**, not the +111 to +382 range every prior handicap
-gauntlet had reported (see "Key Methodological Findings" above). Root-caused via live
-profiling: `MknnEvaluator` recomputed its entire FT accumulator from scratch on every call
-despite the incremental-update infrastructure (`HalfKAv2Makruk::appendChangedIndices` etc.)
-already existing as dead code. Implemented `MknnAccumulator` (rides `StateInfo`) and
-`updateAccumulator()` (backward-walk + forward-replay), verified bit-exact against a
-from-scratch reference across 13 scenarios (188 checks). Result: -372 → -359 (+13 Elo).
+### Central-Control Eval Experiment — concluded inconclusive, not merged (08-30)
 
-**Round 19-20** (2026-08-22/23): diffed the Makruk-adapted files against the `upstream` git
-remote (`FireFather/sf-kernel`) looking for adaptation bugs — found two real ones in
-`Position::seeGe()` (Static Exchange Evaluation): (1) Khon/Met attacker detection used a
-chess-style slider-union formula instead of the reverse-color/non-slider logic
-`attackersTo()` already used correctly elsewhere, and (2) the attacker-check order was
-inherited verbatim from chess's ascending-value order (Pawn<Knight<Bishop<Rook<Queen) instead
-of Makruk's actual order (Pawn<Met<Khon<Knight<Rook). Both fixed, verified via a 2165-check
-fast-vs-slow-reference test (`test_see.cpp`) that was confirmed to have teeth (reverting the
-fix reintroduces real failures). Result: -359 → -346.
-
-**Round 21** (2026-08-23): closed most of the nps gap. Root cause: GCC's auto-vectorizer left
-the L2 forward-pass reduction loop scalar because it lacked permission to reorder floating-point
-operations — not a SIMD-width problem (AVX2 was already active; `ARCH=x86-64-bmi2` cascades
-`avx2=yes`). Added `-fassociative-math -fno-signed-zeros -fno-trapping-math -fno-math-errno`
-(a safe subset, not full `-ffast-math`) scoped to just `mknn_evaluator.cpp`. Also fixed the
-Makefile's own default `ARCH` (was `x86-64-modern`, no AVX2/BMI2 at all) to `x86-64-bmi2`.
-nps: ~40K → ~150-190K (~4×). Result: -346 → -282 (**+64 Elo**), confirmed real at a second seed
-(+90 Elo there) — the largest single-round gain in this project's history.
-
-**Round 22** (2026-08-29): eliminated the remaining `std::vector` heap allocations in
-`MknnEvaluator::evaluate()` via fixed-size stack buffers (`fastEvalOk_` fast path, unchanged
-`std::vector` fallback preserved for any future oversized net). nps +6.3%. Result: -282 → -269
-(+13 Elo).
-
-**Round 23** (2026-08-29): added VERSION3 (MKN3) — int16-quantized L2 weight, with a
-load()-time overflow-safety check that rejects an unsafely-calibrated net. nps +34% (bench),
-real-net eval drift ≤2cp vs the float32 twin across 11 positions. Gauntlet Elo was
-**inconclusive** (+14 at seed=99, +0 at seed=4242) — deployed anyway on the strength of the
-independently-verified nps gain and correctness, explicitly flagged as lower-confidence than
-Round 21/22's deployments.
-
-**Round 24-25** (2026-08-29/30): diffed `search.cpp`/`movepick.cpp`/`timeman.cpp` against
-upstream — **byte-identical, no adaptation bugs** (unlike position.cpp/evaluate.cpp/SEE).
-Tested 3 well-reasoned search-constant candidates against Fairy-Stockfish-NNUE (null-move R,
-LMR base, quiet-move SEE margin) — all landed within 11 Elo of baseline, all discarded per
-the pre-agreed decision criteria. Conclusion: single search-constant tuning is not where this
-engine's remaining Elo deficit lives.
-
-**Round 26** (2026-08-30): `gprof` (works in this sandbox; `perf` is blocked by
-`perf_event_paranoid=4`) profiling found `evaluate()`+`updateAccumulator()` still at 83.5% of
-total CPU time — eval was nowhere near played out. Diagnostic counters confirmed the Round 18
-incremental algorithm itself was working perfectly (98.3% of calls take a 1-hop incremental
-path). The actual bug: `addColumn()`/`subColumn()`/`refreshInto()` used a runtime class member
-(`L1_`) directly as a loop bound, which GCC's vectorizer cannot prove as a stable trip count
-("number of iterations cannot be computed") — the hottest loop in the engine was compiling
-fully scalar despite being a textbook auto-vectorizable pattern. Fix: cache to a local
-`const int` before each loop. nps: 368,821 → 526,342 (**+42.7%**, node counts identical both
-runs, confirming zero behavioral change — also confirmed via the existing 188-check bit-exact
-suite). This closes the nps gap with Fairy-Stockfish-NNUE entirely. Gauntlet Elo flat (-260,
-delta -5) — deployed anyway (zero correctness risk, unlike Round 23). Two consecutive large nps
-wins with ~0 combined Elo (Round 23 + Round 26) is strong evidence the next real lever is
-eval/training quality, not engine speed.
-
-### Central-Control Eval Experiment — Concluded Inconclusive, Not Merged (2026-08-30)
-
-Added `centralControl()` to `makruk_eval.cpp`: an MG-only bonus for Khon (BISHOP) and Met
-(QUEEN — which automatically covers promoted pawns too, since Makruk promotes to Met only with
-no separate piece type) on a widening central zone (rank5 d/e, rank4 c/d/e/f, rank3
-b/c/d/e/f/g), tiered by file (d/e=40cp, c/f=25cp, b/g=12cp — deliberately larger than this
-file's other bonuses so the effect would be observable). Verified square-by-square via
-`makrukeval` against the exact spec, including correct Black-side mirroring; new test
-`testCentralControlTieredByFile` added.
-
-Gauntlet result: **inconclusive** — seed=99 gave +11 Elo, seed=4242 gave -21 Elo (sign flip).
-Per the standing decision criteria (see "Key Methodological Findings"), not deployed.
-
-**Closed out (not pursued further) rather than iterated on.** Work is committed and pushed on
-branch `classical-eval-central-control` (commit `b9da620`, not merged) — kept on GitHub for
-reference, not deleted, in case the tier values/zone shape are worth revisiting later. If
-resumed: candidates are different tier values/zone shape, extending the bonus to EG (currently
-MG-only), or a different heuristic shape entirely — but per "Key Methodological Findings,"
-any resumption should budget for a proper 2-seed test before trusting a first result, the same
-mistake-cost this round already paid once.
+Added `centralControl()` to `makruk_eval.cpp`: an MG-only bonus for Khon/Met on a widening
+central zone (rank5 d/e, rank4 c/d/e/f, rank3 b/c/d/e/f/g), tiered by file (d/e=40cp, c/f=25cp,
+b/g=12cp). Verified square-by-square via `makrukeval`; new test `testCentralControlTieredByFile`
+added. Gauntlet: **inconclusive** — seed=99 gave +11 Elo, seed=4242 gave -21 Elo (sign flip) —
+not deployed. Kept on branch `classical-eval-central-control` (commit `b9da620`) for reference;
+any resumption should budget for a proper 2-seed test up front.
 
 ### Round 27 — Fresh Training Data from the Post-Round-26 Engine (2026-09-13)
 
-With nps confirmed plateaued as a lever (Round 26), pivoted to the flagged-but-deferred
-priority: regenerate training data using the current engine (post Rounds 18-26: ~10x faster,
-SEE-correct) instead of continuing to build on data generated by the old, much weaker engine.
+With nps confirmed plateaued (Round 26), pivoted to the deferred priority: regenerate training
+data using the current engine (post Rounds 18-26: ~10x faster, SEE-correct) instead of
+continuing to build on data from the old, much weaker engine.
 
-**Discovery: the historically "validated-good" handicap configs from Rounds 11-14
-(`movetime-a=200/depth-b=4`, `movetime-a=150/depth-b=3`) no longer work.** Regenerating data at
-these exact same settings gave a 97-99% draw rate (vs the historical 50-62%) and, after
-Fairy-SF depth=10 teacher-labeling, blend-range acceptance collapsed from 84-87% to 44.8%. Root
-cause: those configs were calibrated for an engine ~10x slower than today's — the *absolute*
-movetime/depth numbers no longer produce the intended *relative* handicap gap. Two calibration
-probes: raising the opponent's `depth-b` barely moved acceptance (44.8%→46.4%), but cutting our
-own side's `movetime-a` (200ms→30ms) to compensate for the nps gain was far more effective
-(→53.1% at full scale). This is a new, generalizable finding: **handicap configs need
-periodic recalibration as engine speed changes; the "validated-good" label from an earlier
-era doesn't survive a large enough nps jump.**
+**Discovery: the "validated-good" handicap configs from Rounds 11-14 no longer work.**
+Regenerating at the same settings (`movetime-a=200/depth-b=4`, `movetime-a=150/depth-b=3`)
+gave a 97-99% draw rate (vs historical 50-62%) and blend-range acceptance collapsed from
+84-87% to 44.8% — those configs were calibrated for an engine ~10x slower than today's, so the
+*absolute* numbers no longer produce the intended *relative* handicap gap. Raising the
+opponent's `depth-b` barely moved acceptance (44.8%→46.4%); cutting our own `movetime-a`
+(200ms→30ms) to compensate for the nps gain was far more effective (→53.1% at full scale).
+**Generalizable finding: handicap configs need periodic recalibration as engine speed
+changes** — a "validated-good" label doesn't survive a large enough nps jump.
 
-Generated 3 data configs (A: `movetime-a=200/depth-b=4`, C: `movetime-a=150/depth-b=3`, D: the
-recalibrated `movetime-a=30/depth-b=4`, 150 games each), teacher-labeled with Fairy-SF
-depth=10, filtered to blend range (30-400cp), combined with the existing base dataset →
-267,971 positions. Trained 60 epochs (`--lam 0.7 --score-boost 2.0 --color-augment
---batch-size 256`, `--resume` exercised across a real multi-day pause/resume). Best epoch 55,
-val_loss 0.553515. Exported to VERSION3/MKN3.
+Generated 3 data configs (A/C: the old settings; D: the recalibrated `movetime-a=30/
+depth-b=4`; 150 games each), teacher-labeled with Fairy-SF depth=10, filtered to blend range
+(30-400cp), combined with the existing base → 267,971 positions. Trained 60 epochs (standard
+recipe, `--resume` exercised across a real multi-day pause/resume). Best epoch 55, val_loss
+0.553515. Exported to VERSION3/MKN3.
 
-**Gauntlet result — confirmed at 2 seeds, a real improvement:**
+**Gauntlet, confirmed at 2 seeds:**
 
 | Seed | Result | Elo |
 |---|---|---|
@@ -440,15 +372,13 @@ val_loss 0.553515. Exported to VERSION3/MKN3.
 | 4242 | 0W 96D 104L | **-200** |
 | Round 26 baseline (ref) | 0W 73D 127L | -260 |
 
-**+55/+60 Elo**, both seeds landing within 5 Elo of each other — outside the demonstrated ~46
-Elo single-seed noise band, and the two Round 27 seeds agreeing far more tightly with each
-other than either does with the baseline. Deployed via PR #20.
+**+55/+60 Elo**, both seeds within 5 Elo of each other — outside the ~46 Elo single-seed noise
+band. Deployed via PR #20. First round in a long time to beat single-digit/noise-band amounts.
 
-**Process note**: the first attempt at this gauntlet omitted `--adjudication-threshold
-500 --adjudication-streak 5` (the flags Round 26 actually used, confirmed from its saved log)
-and produced a spurious 100%-draw, Elo-0 result on *both* the new and a same-settings control
-run of the old net — see "Key Methodological Findings" above. Caught before deploying anything
-on the bad reading; the corrected re-run above is what's reported and deployed.
+**Process note**: the first gauntlet attempt this round omitted `--adjudication-threshold
+500 --adjudication-streak 5` (the flags Round 26 actually used, per its saved log) and produced
+a spurious 100%-draw/Elo-0 reading on *both* nets — see "Key Methodological Findings" above.
+Caught via a same-flags control run before deploying on the bad reading.
 
 ---
 
