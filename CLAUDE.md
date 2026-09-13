@@ -339,8 +339,10 @@ Added `centralControl()` to `makruk_eval.cpp`: an MG-only bonus for Khon/Met on 
 central zone (rank5 d/e, rank4 c/d/e/f, rank3 b/c/d/e/f/g), tiered by file (d/e=40cp, c/f=25cp,
 b/g=12cp). Verified square-by-square via `makrukeval`; new test `testCentralControlTieredByFile`
 added. Gauntlet: **inconclusive** — seed=99 gave +11 Elo, seed=4242 gave -21 Elo (sign flip) —
-not deployed. Kept on branch `classical-eval-central-control` (commit `b9da620`) for reference;
-any resumption should budget for a proper 2-seed test up front.
+not deployed. The reference branch was deleted (2026-09-13, GitHub branch cleanup) — if
+resumed, this section's spec (zone shape, tier values) is the starting point; the code itself
+would need to be reimplemented from scratch. Any resumption should budget for a proper 2-seed
+test up front.
 
 ### Round 27 — Fresh Training Data from the Post-Round-26 Engine (2026-09-13)
 
