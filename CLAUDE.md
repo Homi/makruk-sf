@@ -182,15 +182,15 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 29, 2026-09-14)
+## Current Status (as of Round 30, 2026-09-14)
 
-* **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-29 were both
+* **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-30 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
   what's actually shipped at any given time, this note can drift.
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-29 (both not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-30 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -198,14 +198,19 @@ When working in this repository:
   pivoted to training-data quality and delivered **+55/+60 Elo, confirmed at 2 seeds**. Round
   28 tried scaling that same recipe 3× further and came back sign-flipped/inconclusive. Round
   29 tried a different lever (backporting a pawn-only correction-history search technique) and
-  came back a small but *consistent* regression at both seeds (-15/-22 Elo) — not deployed.
-* **Next priority**: two levers remain untried from Round 28's analysis — re-tuning the
-  classical/NNUE blend gate (±100cp/300cp, unchanged since Round 7, set for a much weaker net)
-  now that net quality has improved, and a larger NNUE L1 (untested at Elo level, nps headroom
-  exists post-Round-26). The third (search-technique backport) got a first real attempt in
-  Round 29; if revisited, the untuned constants (table size/divisor/cap, see Round 29's
-  write-up) are the first thing to recalibrate before concluding the technique itself doesn't
-  help this engine — a Round-24-25-style constant sweep, not a full redesign.
+  came back a small but *consistent* regression at both seeds (-15/-22 Elo). Round 30 widened
+  the classical/NNUE blend gate (300→450cp) and came back a **confirmed regression** — both
+  seeds negative, one (-49 Elo) clearing the noise band outright — reaffirming Round 7's
+  original finding that the net still underestimates material relative to classical, so
+  trusting it in a wider range of positions actively hurts rather than helps.
+* **Next priority**: one lever remains untried from Round 28's analysis — a larger NNUE L1
+  (untested at Elo level, nps headroom exists post-Round-26). The other two (search-technique
+  backport, blend gate/cap) both got a first real attempt (Rounds 29, 30) and both regressed;
+  neither is fully closed out — Round 29's untuned constants could still be swept, and Round
+  30 only tried widening the gate one direction (a *narrower* gate, trusting classical more, is
+  the untested opposite direction and hasn't been ruled out) — but per this project's own
+  pattern, a third search/eval-constant attempt in a row landing negative is a signal to step
+  back and try the NNUE-L1 direction next rather than a fourth constant tweak.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -485,6 +490,45 @@ first follow-up (if revisited) is a Round-24-25-style constant sweep before conc
 technique itself is a dead end, though per this project's "small changes, don't over-invest in
 an unproven direction" philosophy this hasn't been scheduled.
 
+### Round 30 — Blend Gate Widened 300→450cp: Confirmed Regression, Not Deployed (2026-09-14)
+
+The other constant-tuning lever flagged since Round 28: `evaluate.cpp`'s classical/NNUE blend
+gate (`|classical|<300cp` triggers NNUE consultation) and cap (delta clamped to ±100cp) were
+last tuned in Round 7, against a net several generations weaker than Round 27's. Round 7 itself
+found cap-widening (tested ±150/±200) gave no gain because the NNUE delta rarely even
+approaches ±100cp — so this round targeted the gate instead, widening it to 450cp (cap left
+unchanged at 100) to let the now-substantially-better Round 27 net participate in a wider range
+of positions.
+
+Single-line change (`evaluate.cpp`, the gate constant only), verified via the full test suite +
+`build_verify.sh` + `perft 5` (unaffected by construction — a pure eval-formula constant, no
+logic/structure change).
+
+**Gauntlet, confirmed at 2 seeds — clear regression:**
+
+| Seed | Round 30 (gate=450) | Round 27 (ref) | Delta |
+|---|---|---|---|
+| 99 | 0W 86D 114L → -225 | -205 | -20 |
+| 4242 | 0W 77D 123L → -249 | -200 | **-49** |
+
+Both seeds agree in direction (negative), and the seed=4242 delta (-49) clears the ~46 Elo
+single-seed noise band outright — a confirmed, not merely suggestive, regression. **Not
+deployed** — reverted cleanly (gate restored to 300, matching Round 27's tracked state exactly;
+no net involved).
+
+**Takeaway**: reaffirms Round 6/7's original finding that the NNUE net still underestimates
+material relative to classical eval, even after Round 27's data-quality improvements — widening
+the gate exposes more positions (specifically those in the 300-450cp range, where classical is
+usually correctly identifying a real, clear advantage) to NNUE's calibration weakness, actively
+hurting rather than helping. This is a meaningfully different failure mode from Round 29's small
+regression: here the mechanism (blend formula) is unchanged and well-understood, and the result
+cleanly confirms a known, specific weakness rather than surfacing a new, ambiguous one. A
+*narrower* gate (trusting classical more, not less) is the untested opposite direction and
+remains a candidate, though the net's known material-underestimation problem would need fixing
+first (more/better training data in the 300+cp range, or explicit calibration) before a wider
+gate has any chance of working — simply moving the constant further in either direction without
+addressing that root cause is unlikely to help.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -501,6 +545,7 @@ an unproven direction" philosophy this hasn't been scheduled.
 | Round 27 (fresh training data, recalibrated handicaps) | -205/-200 | **+55/+60** | confirmed at 2 seeds (5 Elo apart); first round in a long time to beat single-digit/noise |
 | Round 28 (3× scale-up of Round 27's recipe) | -217/-198 | -12/+2 | sign-flipped across seeds — inconclusive, not deployed; net stayed on Round 27 |
 | Round 29 (pawn correction history, untuned constants) | -220/-222 | -15/-22 | both seeds agree (negative), small consistent regression — not deployed |
+| Round 30 (blend gate widened 300→450cp) | -225/-249 | -20/-49 | both seeds agree (negative), -49 clears the noise band — confirmed regression, not deployed |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
