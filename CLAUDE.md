@@ -182,31 +182,30 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 28, 2026-09-14)
+## Current Status (as of Round 29, 2026-09-14)
 
-* **Embedded net**: `src/3587509696.bin` (still Round 27 — Round 28 was inconclusive, not
-  deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for what's actually shipped at any
-  given time, this note can drift.
+* **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-29 were both
+  negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
+  what's actually shipped at any given time, this note can drift.
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Round 28 (inconclusive, not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-29 (both not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
   Fairy-Stockfish-NNUE entirely but confirming nps had plateaued as a lever. Round 27 then
   pivoted to training-data quality and delivered **+55/+60 Elo, confirmed at 2 seeds**. Round
-  28 tried scaling that same recipe 3× further and came back sign-flipped/inconclusive despite
-  a *better* blend-range acceptance rate and the largest single-round dataset addition yet —
-  more data of the same kind is not a guaranteed lever past a certain point.
-* **Next priority**: per Round 28's own conclusion, the next attempt at improving Elo should
-  try a different lever rather than a third straight data-volume scale-up — candidates
-  analyzed but not yet started: re-tuning the classical/NNUE blend gate (±100cp/300cp, unchanged
-  since Round 7, set for a much weaker net) now that net quality has improved; a larger NNUE L1
-  (untested at Elo level, and nps headroom now exists post-Round-26); or backporting newer
-  Stockfish search techniques (`correctionHistory`/`pawnHistory`/`lowPlyHistory` — confirmed
-  absent from this codebase's search.cpp, and a likely real generational gap vs
-  Fairy-Stockfish's much more current search) — highest-effort, highest-risk of the three.
+  28 tried scaling that same recipe 3× further and came back sign-flipped/inconclusive. Round
+  29 tried a different lever (backporting a pawn-only correction-history search technique) and
+  came back a small but *consistent* regression at both seeds (-15/-22 Elo) — not deployed.
+* **Next priority**: two levers remain untried from Round 28's analysis — re-tuning the
+  classical/NNUE blend gate (±100cp/300cp, unchanged since Round 7, set for a much weaker net)
+  now that net quality has improved, and a larger NNUE L1 (untested at Elo level, nps headroom
+  exists post-Round-26). The third (search-technique backport) got a first real attempt in
+  Round 29; if revisited, the untuned constants (table size/divisor/cap, see Round 29's
+  write-up) are the first thing to recalibrate before concluding the technique itself doesn't
+  help this engine — a Round-24-25-style constant sweep, not a full redesign.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -430,6 +429,62 @@ different lever (different config mix, or one of the other three options from th
 follow-up analysis: blend gate/cap re-tuning, larger NNUE L1, or backporting newer Stockfish
 search techniques) rather than a third straight data-volume scale-up.
 
+### Round 29 — Pawn Correction History Backport: Small Regression, Not Deployed (2026-09-14)
+
+Took the third lever from Round 28's list: backported a static-eval bias-correction mechanism
+("correction history") that modern Stockfish added around 2023, missing entirely from this
+codebase's `search.cpp` (which has `continuationHistory`/`captureHistory` and singular
+extensions — ~2020-2021-era techniques — but nothing from the correction-history generation).
+
+**Scoping, forced by a real gap found during investigation**: this codebase has `pawnKey()`
+(confirmed correctly promotion-aware via a subtle double-XOR-cancellation in `doMove`) but **no
+`materialKey()`/`minorPieceKey()`/`nonPawnKey()` at all** — real Stockfish's correction history
+normally uses all four. Building the other three from scratch would mean new incremental
+Zobrist-key infrastructure touching Makruk's promotion semantics — the same class of subtle-bug
+risk that caused the `seeGe()` bugs (Round 19-20). Scoped this round to **pawn correction
+history only**, reusing `pawnKey()` read-only; material/minor-piece/non-pawn correction and
+`qsearch()` integration explicitly deferred. Applied the correction only to the local `eval`
+variable (never `ss->staticEval`, never persisted to TT) at both TT-hit and no-TT-hit branches
+in `search()` plus the ProbCut margin — zero changes to the mate-range-sensitive TT-store path
+or already-tuned improving/razoring/extension heuristics.
+
+New `PawnCorrectionHistory` table (`Statistics<int16_t,1024,COLOR_NB,16384>`, reusing the
+existing history-table template family), updated at the end of each node
+(`(bestValue-ss->staticEval)*depth`, clamped, guarded against `excludedMove`/in-check/mate-range
+results) and consulted via a new `Search::correctedStaticEval()`. **All constants are untuned
+first-pass values** — no verifiable upstream source to copy exactly, so this was as much a test
+of "does the mechanism help with reasonable constants" as "is the technique worth having."
+
+New test `test_corrhist.cpp` (16 checks) surfaced a real, pre-existing, unrelated finding while
+being written: **a directly-constructed `Thread` object (bypassing `ThreadPool`) crashes even
+on this project's unmodified code** — confirmed empirically by reproducing on pristine `main`.
+`Thread`'s startup depends on global state (UCI `Options`) that only `ThreadPool::set()`
+establishes correctly. The test was written to go through the real `ThreadPool` instead
+(matching `main.cpp`'s own init order), not flagged as a bug to fix this round (out of scope,
+noted for awareness — nothing in normal engine operation ever constructs a bare `Thread`).
+
+**Gauntlet, confirmed at 2 seeds — small but consistent regression:**
+
+| Seed | Round 29 | Round 27 (ref) | Delta |
+|---|---|---|---|
+| 99 | 0W 88D 112L → -220 | -205 | -15 |
+| 4242 | 0W 87D 113L → -222 | -200 | -22 |
+
+Unlike Round 28 (sign-flipped, genuinely inconclusive), both seeds here **agree in direction**
+(both negative) and land within 2 Elo of each other (-220 vs -222) — tighter agreement than
+Round 27's own +55/+60 spread. This reads as a real, if small, regression rather than noise,
+though both deltas (-15/-22) are individually inside the ~46 Elo single-seed noise band.
+**Not deployed** — reverted cleanly (this was a pure `search.cpp`/`movepick.h`/`thread.{h,cpp}`
+change, no net involved; `src/evaluate.h` was never touched). Kept on branch
+`pawn-correction-history`, committed locally, not merged.
+
+**Takeaway**: this is evidence *against these specific untuned constants*, not proof the
+technique can't work for Makruk-SF. The `Grain`/`MaxCorrection`/`Divisor`/`UpdateCap` values
+were picked by analogy to existing tables' bonus-to-divisor ratios, not tuned — a plausible
+first follow-up (if revisited) is a Round-24-25-style constant sweep before concluding the
+technique itself is a dead end, though per this project's "small changes, don't over-invest in
+an unproven direction" philosophy this hasn't been scheduled.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -445,6 +500,7 @@ search techniques) rather than a third straight data-volume scale-up.
 | Round 26 (vectorization fix, +42.7% nps) | -260 | -5 (flat) | nps gap with Fairy-SF-NNUE now fully closed; deployed (zero risk) |
 | Round 27 (fresh training data, recalibrated handicaps) | -205/-200 | **+55/+60** | confirmed at 2 seeds (5 Elo apart); first round in a long time to beat single-digit/noise |
 | Round 28 (3× scale-up of Round 27's recipe) | -217/-198 | -12/+2 | sign-flipped across seeds — inconclusive, not deployed; net stayed on Round 27 |
+| Round 29 (pawn correction history, untuned constants) | -220/-222 | -15/-22 | both seeds agree (negative), small consistent regression — not deployed |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
