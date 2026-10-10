@@ -8,6 +8,7 @@
 #include "thread.h"
 #include "nnue/mknn_evaluator.h"
 #include "makruk/makruk_eval.h"
+#include "makruk/makruk_counting.h"
 #include "position.h"
 using namespace std;
 
@@ -62,7 +63,19 @@ namespace Nebula{
   Value Eval::evaluate(const Position& pos, int* complexity){
     if (complexity)
       *complexity = 0;
-    if (pos.state()->makrukCounting.active)
+    // NOTE: search.cpp already checks pos.isDraw(ss->ply) -- which covers the
+    // actual counting-draw via isMakrukCountingDraw() -- before calling
+    // evaluate() on any non-root node, so this is a defensive fallback for
+    // paths that call evaluate() directly (root node, debug commands), not
+    // the primary draw-detection mechanism. Previously this checked
+    // `makrukCounting.active` instead, which is true for the ENTIRE duration
+    // of a counting-eligible endgame (up to 128 plies), not just the terminal
+    // draw ply -- that flattened every node in every pawnless bare-king
+    // endgame to a blind VALUE_DRAW, making makrukClassicalEval()'s mop-up/
+    // KBK endgame logic dead code during real search (it only ever ran via
+    // direct unit-test calls and the makrukeval debug command, bypassing
+    // evaluate() entirely). Fixed to check the actual draw condition instead.
+    if (isMakrukCountingDraw(pos.state()->makrukCounting))
       return VALUE_DRAW;
     const Value classical = makrukClassicalEval(pos);
     if (Eval::mknnEval.isLoaded() && std::abs(int(classical)) < 300) {

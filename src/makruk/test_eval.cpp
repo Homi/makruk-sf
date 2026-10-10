@@ -292,6 +292,34 @@ static void testCountingUrgencyNoOpWhenInactive() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 18: Eval::evaluate() must consult real classical eval (mop-up/material)
+// throughout a counting-eligible endgame, not just blindly return a flat
+// draw for its entire duration — only the actual terminal draw ply should.
+// (Regression test for a bug where `makrukCounting.active`, true for the
+// WHOLE endgame, was used instead of `isMakrukCountingDraw()`, true only at
+// the limit — making makrukClassicalEval()'s endgame logic dead code during
+// real search.)
+// ---------------------------------------------------------------------------
+static void testEvaluateUsesRealEvalBeforeCountingLimit() {
+    const std::string name = "testEvaluateUsesRealEvalBeforeCountingLimit";
+    Eval::Nnue::init();
+    Position pos; StateListPtr st;
+    setPos(pos, st, "k7/8/8/8/8/8/8/R3K3 w - - 0 1"); // White K+R vs bare Black king
+
+    MakrukCountingState& cs = pos.state()->makrukCounting;
+    assert(cs.active && "KRK vs bare king must be counting-eligible");
+
+    cs.count = 0;
+    const Value vEarly = Eval::evaluate(pos);
+    assert(vEarly > 500 && "Eval::evaluate() must reflect real material/mop-up, not a flat draw");
+
+    cs.count = cs.limit; // exactly at the counting-draw limit
+    const Value vAtLimit = Eval::evaluate(pos);
+    assert(vAtLimit == VALUE_DRAW && "Eval::evaluate() must return a draw exactly at the limit");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -314,6 +342,7 @@ void runMakrukEvalTests() {
     testKRKKingCloseBonus();
     testCountingUrgencyAmplifiesMopup();
     testCountingUrgencyNoOpWhenInactive();
+    testEvaluateUsesRealEvalBeforeCountingLimit();
 
     // ---------------------------------------------------------------------------
     // NNUE smoke tests — run after all classical tests.

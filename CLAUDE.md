@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 32, 2026-10-10)
+## Current Status (as of Round 33, 2026-10-11)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-32 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-33 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -205,18 +205,24 @@ When working in this repository:
   correction-history backport, blend gate/cap retune, larger NNUE L1) — **none beat Round 27**
   (28: sign-flipped/inconclusive; 29: small consistent regression -15/-22; 30: confirmed
   regression -20/-49; 31: confirmed regression -44/-69, doubling NNUE L1 on the exact Round 27
-  dataset). Round 32 then tried a classical-eval lever instead (counting-danger awareness —
-  amplify the mop-up bonus as the counting-draw ply count approaches its limit) and also came
-  back a small, consistent regression (-23/-28, both seeds landing on an identical 0W 85D 115L)
-  — not deployed.
-* **Next priority**: every lever tried since Round 27 (data, search correction-history, blend
-  gate, NNUE L1, counting-danger eval) has failed to beat it, by a widening margin each time
-  (28-29 near-flat/small, 30-31 clear regressions, 32 small-but-real). Two directions remain
-  genuinely untried: (1) a *narrower* blend gate (300→200ish, trusting classical more — the
-  untested opposite of Round 30, cheap, no retraining needed), and (2) the other two classical-
-  eval ideas from the "not yet implemented" list — promotion-race urgency and rook-trap risk —
-  which are mechanically unrelated to counting-danger (Round 32) and so aren't pre-judged by
-  its result. Round 29's untuned correction-history constants also remain un-swept if revisited.
+  dataset). Round 32 tried a classical-eval lever instead (counting-danger awareness) and
+  measured a small regression (-23/-28) — but Round 33 then discovered this was almost
+  certainly noise: `evaluate.cpp` had an unrelated pre-existing bug (predates Round 18) that
+  made `makrukClassicalEval()`'s entire bare-king endgame branch dead code during real search,
+  so Round 32's mechanism never actually ran. Round 33 fixed that bug but the gauntlet came
+  back inconclusive (0/-30 across seeds) — not a confirmed win despite being a genuine
+  correctness fix; left as an open decision (see Development History) rather than deployed.
+* **Next priority**: every lever tried since Round 27 has failed to confirm a win (data,
+  search correction-history, blend gate, NNUE L1, counting-danger eval, and now the
+  evaluate.cpp counting-draw fix itself). Two directions remain genuinely untried: (1) a
+  *narrower* blend gate (300→200ish, trusting classical more — the untested opposite of
+  Round 30, cheap, no retraining needed — and now arguably more promising to try *on top of*
+  Round 33's fix, since classical eval's endgame signal is finally live during search), and
+  (2) the other two classical-eval ideas from the "not yet implemented" list — promotion-race
+  urgency and rook-trap risk — which are mechanically unrelated to counting-danger and so
+  aren't pre-judged by Round 32's result, and which now have a real chance to matter given
+  Round 33's fix. Round 29's untuned correction-history constants also remain un-swept if
+  revisited.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -630,6 +636,74 @@ within a 200ms search horizon that rarely reaches deep enough to approach the re
 other two classical-eval ideas (promotion-race urgency, rook-trap risk) are mechanically
 unrelated to this one and remain untried.
 
+**Correction (discovered in Round 33, below)**: this takeaway should be read with a major
+caveat. `evaluate.cpp` had an unrelated pre-existing bug that made `makrukClassicalEval()`'s
+entire bare-king endgame branch — mop-up bonus, KBK handling, and this round's urgency
+amplification — dead code during real search (see Round 33). The -23/-28 Elo measured here was
+almost certainly pure build-to-build noise on an inert code path, not a real effect of the
+mechanism tested. The mechanism itself has not actually been evaluated under real search yet.
+
+### Round 33 — Fix: `evaluate.cpp` No Longer Blinds Entire Counting-Eligible Endgames — Inconclusive, Not Deployed (2026-10-11)
+
+While investigating Round 32's suspiciously-identical-across-seeds result, found that
+`evaluate.cpp` has had this since the very first Makruk-eval commit (predates Round 18 — every
+Elo number in this project's history was measured with it in place):
+
+```cpp
+if (pos.state()->makrukCounting.active)
+  return VALUE_DRAW;
+```
+
+`search.cpp` already checks `pos.isDraw(ss->ply)` — which covers the actual counting-draw via
+`isMakrukCountingDraw()` — before calling `evaluate()` on any non-root node (confirmed by
+reading `search.cpp` directly). But `makrukCounting.active` is true for the *entire* duration
+of a counting-eligible endgame (up to 128 plies for a lone-knight ending), not just the
+terminal draw ply. The result: every node throughout every pawnless bare-king endgame got a
+flat `VALUE_DRAW`, making `makrukClassicalEval()`'s mop-up/KBK endgame logic — listed in
+CLAUDE.md as "Implemented" — **dead code during real search**. It only ever ran via direct
+unit-test calls (bypassing `evaluate()`) and the `makrukeval` debug command. The original
+commit message's own stated intent ("Counting-draw positions still short-circuit to
+VALUE_DRAW before either eval runs") confirms this was meant to catch the terminal draw only —
+the implementation just used the wrong predicate the whole time.
+
+Fix: changed the condition to `isMakrukCountingDraw(pos.state()->makrukCounting)`, the
+predicate that actually means "this position is a confirmed draw" (internally guards on
+`cs.active && cs.limit > 0 && cs.count >= cs.limit`, so it's safe when inactive). One new
+regression test (`testEvaluateUsesRealEvalBeforeCountingLimit`) confirms `Eval::evaluate()`
+now returns real material/mop-up signal early in a KRK endgame and exactly `VALUE_DRAW` right
+at the limit. Full verification gate passed (`build_tests.sh` 20/20, `build_verify.sh`,
+`perft 5` exact).
+
+Checked whether the fix even had a chance to show up in this gauntlet format before trusting
+the result: 60/200 (seed 99) and 45/200 (seed 4242) games exceeded 80 plies, so long/bare-king-
+capable endgames were not rare in this sample.
+
+**Gauntlet, 2 seeds vs Fairy-Stockfish-NNUE — flat to slightly negative, inconclusive:**
+
+| Seed | Round 33 (fix applied) | Round 27 (ref) | Delta |
+|---|---|---|---|
+| 99 | 0W 94D 106L → -205 | -205 | **0** |
+| 4242 | 0W 84D 116L → -230 | -200 | -30 |
+
+One seed landed exactly on the Round 27 baseline, the other regressed by 30 — this doesn't meet
+this project's bar for a confirmed result in either direction (needs both seeds to agree and at
+least one to clear the ~46 Elo noise band). **Not deployed as an Elo improvement** — kept on
+branch `classical-eval-new-heuristics`, committed locally, not merged, pending a decision on
+whether to keep it anyway on correctness grounds (see Takeaway).
+
+**Takeaway**: this is a case this project hasn't hit before — a change motivated by provable
+*correctness* (the implementation didn't match its own documented intent) rather than a tuning
+guess, that the gauntlet doesn't confirm as an Elo win. Two honest readings: (1) per this
+project's consistent "the gauntlet is the only real signal" philosophy, an unconfirmed result
+is an unconfirmed result regardless of how principled the reasoning was, and it should sit
+un-merged like any other inconclusive round; (2) the fix removes a real logic error with zero
+correctness risk (full test suite + perft unaffected) and the gauntlet's silence here may
+reflect the specific methodology (200ms, adjudicated at 500cp) rather than the fix being
+neutral in general — bare-king conversion quality plausibly matters more in longer games,
+against weaker/non-adjudicated opponents, or for training-data generation (classical eval
+feeds teacher-label quality) than it does in this particular fast equal-condition format. Left
+as an open decision rather than resolved unilaterally.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -648,7 +722,8 @@ unrelated to this one and remain untried.
 | Round 29 (pawn correction history, untuned constants) | -220/-222 | -15/-22 | both seeds agree (negative), small consistent regression — not deployed |
 | Round 30 (blend gate widened 300→450cp) | -225/-249 | -20/-49 | both seeds agree (negative), -49 clears the noise band — confirmed regression, not deployed |
 | Round 31 (NNUE L1 doubled 512→1024, same dataset) | -249/-269 | -44/-69 | both seeds agree (negative), -69 clears the noise band — confirmed regression, not deployed; completes all 4 of Round 28's levers, none beat Round 27 |
-| Round 32 (classical eval: counting-danger awareness) | -228/-228 | -23/-28 | both seeds landed identical (0W 85D 115L), small consistent regression — not deployed |
+| Round 32 (classical eval: counting-danger awareness) | -228/-228 | -23/-28 | both seeds landed identical (0W 85D 115L) — later found to be dead code during real search (see Round 33), so this was almost certainly noise, not a real effect |
+| Round 33 (fix: `evaluate.cpp` no longer blinds whole counting-eligible endgames) | -205/-230 | 0/-30 | one seed flat, one down 30 — inconclusive by this project's bar; correctness fix, not deployed as an Elo win |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
