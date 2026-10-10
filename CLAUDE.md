@@ -105,9 +105,11 @@ Material values (MG/EG): Pawn 126/208, Knight 781/854, Khon 660/640, Rook 1276/1
 420/450, King 0. Implemented heuristics: PST tables (all piece types), rook activity
 (open/semi-open file), king safety (pawn shield, MG only), KBK/mopup endgame guidance
 (push weak king to a Khon-reachable corner, close own king), insufficient-material draw
-detection. **Not yet implemented**: promotion-race urgency, rook-trap risk, explicit
-"counting danger" awareness. An experimental Khon/Met central-control bonus was tried and
-found inconclusive (sign-flipped between seeds) — see "Central-Control Eval Experiment" below;
+detection. **Not yet implemented**: promotion-race urgency, rook-trap risk. A counting-danger
+awareness heuristic (amplify the mop-up bonus as the counting-draw ply count approaches its
+limit) was tried in Round 32 and came back a small, consistent regression — not merged, see
+Development History. An experimental Khon/Met central-control bonus was tried and found
+inconclusive (sign-flipped between seeds) — see "Central-Control Eval Experiment" below;
 not merged.
 
 ---
@@ -182,35 +184,39 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 30, 2026-09-14)
+## Current Status (as of Round 32, 2026-10-10)
 
-* **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-30 were all
+* **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
   what's actually shipped at any given time, this note can drift.
+* **Target**: -150 Elo vs Fairy-Stockfish-NNUE (user-set, 2026-10-10) — needs **+50 to +55
+  Elo** from the current -205/-200, a single-round-sized gain by this project's own history
+  (Round 21: +64; Round 27: +55/+60), not a multi-round accumulation.
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-30 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-32 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
   Fairy-Stockfish-NNUE entirely but confirming nps had plateaued as a lever. Round 27 then
-  pivoted to training-data quality and delivered **+55/+60 Elo, confirmed at 2 seeds**. Round
-  28 tried scaling that same recipe 3× further and came back sign-flipped/inconclusive. Round
-  29 tried a different lever (backporting a pawn-only correction-history search technique) and
-  came back a small but *consistent* regression at both seeds (-15/-22 Elo). Round 30 widened
-  the classical/NNUE blend gate (300→450cp) and came back a **confirmed regression** — both
-  seeds negative, one (-49 Elo) clearing the noise band outright — reaffirming Round 7's
-  original finding that the net still underestimates material relative to classical, so
-  trusting it in a wider range of positions actively hurts rather than helps.
-* **Next priority**: one lever remains untried from Round 28's analysis — a larger NNUE L1
-  (untested at Elo level, nps headroom exists post-Round-26). The other two (search-technique
-  backport, blend gate/cap) both got a first real attempt (Rounds 29, 30) and both regressed;
-  neither is fully closed out — Round 29's untuned constants could still be swept, and Round
-  30 only tried widening the gate one direction (a *narrower* gate, trusting classical more, is
-  the untested opposite direction and hasn't been ruled out) — but per this project's own
-  pattern, a third search/eval-constant attempt in a row landing negative is a signal to step
-  back and try the NNUE-L1 direction next rather than a fourth constant tweak.
+  pivoted to training-data quality and delivered **+55/+60 Elo, confirmed at 2 seeds**. Rounds
+  28-31 each tried one of the four levers from Round 28's own analysis (data scale-up, search
+  correction-history backport, blend gate/cap retune, larger NNUE L1) — **none beat Round 27**
+  (28: sign-flipped/inconclusive; 29: small consistent regression -15/-22; 30: confirmed
+  regression -20/-49; 31: confirmed regression -44/-69, doubling NNUE L1 on the exact Round 27
+  dataset). Round 32 then tried a classical-eval lever instead (counting-danger awareness —
+  amplify the mop-up bonus as the counting-draw ply count approaches its limit) and also came
+  back a small, consistent regression (-23/-28, both seeds landing on an identical 0W 85D 115L)
+  — not deployed.
+* **Next priority**: every lever tried since Round 27 (data, search correction-history, blend
+  gate, NNUE L1, counting-danger eval) has failed to beat it, by a widening margin each time
+  (28-29 near-flat/small, 30-31 clear regressions, 32 small-but-real). Two directions remain
+  genuinely untried: (1) a *narrower* blend gate (300→200ish, trusting classical more — the
+  untested opposite of Round 30, cheap, no retraining needed), and (2) the other two classical-
+  eval ideas from the "not yet implemented" list — promotion-race urgency and rook-trap risk —
+  which are mechanically unrelated to counting-danger (Round 32) and so aren't pre-judged by
+  its result. Round 29's untuned correction-history constants also remain un-swept if revisited.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -529,6 +535,101 @@ first (more/better training data in the 300+cp range, or explicit calibration) b
 gate has any chance of working — simply moving the constant further in either direction without
 addressing that root cause is unlikely to help.
 
+### Round 31 — NNUE L1 Doubled 512→1024: Confirmed Regression, Not Deployed (2026-10-10)
+
+The last of the four levers identified in Round 28's analysis. Raised `MknnMaxL1` in
+`src/nnue/mknn_accumulator.h` 512→1024 (prerequisite, verified backward-compatible/bit-exact
+with the Round 27 net before touching training), then bumped `train.py`'s `L1` constant
+512→1024 (L2/L3 held at 32 to isolate L1 as the only architecture variable). Trained on
+`train_round27_combined.tsv` — the *exact same dataset* Round 27 used — so any Elo change is
+attributable to capacity alone, not data.
+
+Training ran 60 epochs, survived a real multi-day pause/resume (SIGTERM at epoch 47 for a
+machine shutdown, resumed cleanly from `makruk_round31_resume.pt`). Best epoch 58, val_loss
+**0.553548** — essentially identical to Round 27's 0.553515 (L1=512), again consistent with
+this project's "val_loss doesn't predict Elo" finding. Exported to VERSION3/MKN3; the
+int16-L2 overflow-safety check (Round 23) passed with headroom 1.0× (worst-case accumulator
+sum 1,073,416,192 against a 1,073,741,824 budget) — tight by design (the auto-calibration
+picks the highest-precision scale the safety margin allows), not a defect. Full verification
+gate (`build_tests.sh`, `build_verify.sh`, `perft 5` = 6,223,994 nodes exact) passed clean.
+
+**Gauntlet, confirmed at 2 seeds — clear regression:**
+
+| Seed | Round 31 (L1=1024) | Round 27 (ref, L1=512) | Delta |
+|---|---|---|---|
+| 99 | 0W 77D 123L → -249 | -205 | -44 |
+| 4242 | 0W 70D 130L → -269 | -200 | **-69** |
+
+Both seeds agree in direction (negative), and the seed=4242 delta (-69) clears the ~46 Elo
+single-seed noise band outright — a confirmed regression, not noise. **Not deployed** —
+`evaluate.h` reverted to `3587509696.bin` (Round 27), rebuilt and re-verified
+(`build_verify.sh` + `perft 5` exact) before reporting. The L1=1024 infra changes
+(`MknnMaxL1` cap, `train.py`'s `L1` constant) remain committed on branch `nnue-l1-1024`, not
+merged to main's net-selection state. Checkpoint `tools/training/makruk_round31.pt` (val_loss
+0.553548) kept on disk, gitignored, for possible future ablation — same treatment as
+Round 12/15/16/28.
+
+**Takeaway**: doubling capacity on the identical dataset did not help — more capacity without
+more/better data just gives the net more room to fit the same underlying signal, which per
+Round 27/28's findings is already close to this data's ceiling. This completes the set of all
+four Round-28-identified levers (data scale-up: inconclusive; correction history: small
+regression; blend gate: confirmed regression; NNUE L1: confirmed regression) — **none has beaten
+Round 27**, suggesting Round 27's net is a local optimum that small variations around it
+(more data at the same quality, more capacity, search-side bias correction, wider blend trust)
+do not improve on. The two remaining untried directions are a *narrower* blend gate (trusting
+classical more — the untested opposite of Round 30) and new classical-eval heuristics
+(promotion-race urgency, rook-trap risk, counting-danger awareness) that attack the net's
+known material-underestimation weakness from the classical side rather than the net itself.
+
+### Round 32 — Classical Eval: Counting-Danger Awareness — Small Regression, Not Deployed (2026-10-10)
+
+The first of the "not yet implemented" classical-eval ideas flagged since Round 28/31 (the
+other two — promotion-race urgency, rook-trap risk — are mechanically unrelated and untried).
+Makruk's counting rule compresses a bare-king endgame to a draw once the weaker side's claimed
+ply count reaches its limit (`src/makruk/makruk_counting.h`); the existing mop-up bonus
+(push weak king to the edge, close own king) is otherwise flat regardless of how close that
+cliff is, so search only "discovers" the draw at the exact leaf where the limit is hit, with
+no earlier pressure to make faster progress.
+
+Added `applyCountingUrgency()` in `src/makruk/makruk_eval.cpp`: reads the live
+`pos.state()->makrukCounting` (reusing the already-tested counting state, no new
+infrastructure) and scales the mop-up bonus up to +50% as `count` approaches `limit`
+(`mg + mg*count/(2*limit)`, same for eg), applied at both existing mop-up call sites
+(`mopupBonus()` and `kbkMopup()`) in both `makrukClassicalEval()` and `makrukEvalReport()`.
+Two new tests (`testCountingUrgencyAmplifiesMopup`, `testCountingUrgencyNoOpWhenInactive`)
+directly manipulate `cs.count` the same way `test_counting.cpp` already does, isolating the
+effect from position changes. Full verification gate passed clean (`build_tests.sh` 19/19,
+`build_verify.sh`, `perft 5` = 6,223,994 nodes exact); also spot-checked end-to-end via real
+UCI moves (mop-up bonus visibly grew from 90→91 after 30 plies of shuffling in a KRK position).
+
+Found and noted, but out of scope to fix, a pre-existing unrelated cosmetic bug while
+investigating: the `makrukcount` UCI debug command constructs a fresh default
+`MakrukCountingState` (`uci.cpp` line ~131) instead of reading `pos.state()->makrukCounting`,
+so it always prints `active: no` regardless of the real state — display-only, does not affect
+real eval/search, which read the correct live state directly.
+
+**Gauntlet, confirmed at 2 seeds vs Fairy-Stockfish-NNUE — small, consistent regression:**
+
+| Seed | Round 32 (counting urgency) | Round 27 (ref) | Delta |
+|---|---|---|---|
+| 99 | 0W 85D 115L → -228 | -205 | -23 |
+| 4242 | 0W 85D 115L → -228 | -200 | -28 |
+
+Both seeds landed on an *identical* result (0W 85D 115L) and agree in direction — tighter
+agreement than Round 27's own confirming spread, reading as a real small regression rather
+than noise, even though both individual deltas (-23/-28) sit inside the ~46 Elo single-seed
+band — the same evidentiary pattern as Round 29's correction-history finding. **Not deployed**
+— the heuristic is reverted from main's eval path; kept on branch `classical-eval-new-
+heuristics`, committed locally, not merged.
+
+**Takeaway**: evidence against *this specific mechanism/constant* (linear up-to-+50%
+amplification of an already-existing bonus), not proof that counting-aware eval can't help at
+all — plausible explanations include the amplification over-weighting positional distance
+(corner/king-closeness) relative to concrete tactical progress, or simply mattering too little
+within a 200ms search horizon that rarely reaches deep enough to approach the real limit. The
+other two classical-eval ideas (promotion-race urgency, rook-trap risk) are mechanically
+unrelated to this one and remain untried.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -546,6 +647,8 @@ addressing that root cause is unlikely to help.
 | Round 28 (3× scale-up of Round 27's recipe) | -217/-198 | -12/+2 | sign-flipped across seeds — inconclusive, not deployed; net stayed on Round 27 |
 | Round 29 (pawn correction history, untuned constants) | -220/-222 | -15/-22 | both seeds agree (negative), small consistent regression — not deployed |
 | Round 30 (blend gate widened 300→450cp) | -225/-249 | -20/-49 | both seeds agree (negative), -49 clears the noise band — confirmed regression, not deployed |
+| Round 31 (NNUE L1 doubled 512→1024, same dataset) | -249/-269 | -44/-69 | both seeds agree (negative), -69 clears the noise band — confirmed regression, not deployed; completes all 4 of Round 28's levers, none beat Round 27 |
+| Round 32 (classical eval: counting-danger awareness) | -228/-228 | -23/-28 | both seeds landed identical (0W 85D 115L), small consistent regression — not deployed |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
@@ -560,6 +663,10 @@ to this table — different methodology, not true strength. See "Key Methodologi
 * `tools/training/makruk_round28.pt` — Round 28 checkpoint (3× scale-up of Round 27's recipe),
   val_loss 0.555746, Elo -217/-198 (2-seed, sign-flipped/inconclusive), not deployed,
   gitignored, kept for potential future ablation
+* `tools/training/makruk_round31.pt` — Round 31 checkpoint (NNUE L1 doubled 512→1024, Round
+  27's exact dataset), val_loss 0.553548, Elo -249/-269 (2-seed confirmed regression), not
+  deployed, gitignored, kept for potential future ablation (e.g. pairing L1=1024 with a larger
+  L2/L3 instead of leaving them at 32)
 * `src/3769833465.bin` — Round 23 VERSION3/MKN3 (int16 L2), archived
 * `src/2020277415.bin` — Round 14 net, MKN2 int16, L1=512 — same underlying weights as
   3769833465.bin before L2 quantization, archived

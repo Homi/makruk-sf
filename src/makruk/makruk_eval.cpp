@@ -7,6 +7,7 @@
 #include "makruk_eval.h"
 #include "../position.h"
 #include "../bitboard.h"
+#include "makruk_counting.h"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -286,6 +287,24 @@ static Score mopupBonus(const Position& pos, Color stronger) {
     return S(edgeBonus + closeBonus, edgeBonus + closeBonus);
 }
 
+// Counting-danger awareness: Makruk's counting rule compresses a bare-king
+// endgame to a draw once the weaker side's claimed count reaches its limit
+// (see makruk_counting.h). Without any warning, the search only "discovers"
+// this at the exact leaf where the limit is hit; the mop-up bonus above is
+// otherwise flat regardless of how close that cliff is. Amplify the mop-up
+// bonus (up to +50% right at the limit) so moves that make real progress
+// toward mate (the same corner/king distances the bonus already measures)
+// are valued more as the clock runs down, instead of search treating an
+// early, leisurely approach the same as a last-chance one.
+static Score applyCountingUrgency(Score bonus, const Position& pos) {
+    const MakrukCountingState& cs = pos.state()->makrukCounting;
+    if (!cs.active || cs.limit <= 0) return bonus;
+    const int count = std::min(cs.count, cs.limit);
+    const int mg = mgValue(bonus) + mgValue(bonus) * count / (2 * cs.limit);
+    const int eg = egValue(bonus) + egValue(bonus) * count / (2 * cs.limit);
+    return S(mg, eg);
+}
+
 // ---------------------------------------------------------------------------
 // Phase
 // ---------------------------------------------------------------------------
@@ -347,10 +366,10 @@ Value makrukClassicalEval(const Position& pos) {
                 // Weak king hides in a back corner the Khon cannot cover — draw.
                 score = calcScore(mgValue(score) / 8, egValue(score) / 8);
             } else {
-                add(score, kbkMopup(pos, stronger), stronger);
+                add(score, applyCountingUrgency(kbkMopup(pos, stronger), pos), stronger);
             }
         } else {
-            add(score, mopupBonus(pos, stronger), stronger);
+            add(score, applyCountingUrgency(mopupBonus(pos, stronger), pos), stronger);
         }
         break;
     }
@@ -385,12 +404,12 @@ std::string makrukEvalReport(const Position& pos) {
             if (isKBKBackCorner(pos, stronger)) {
                 egDesc = "draw (KBK back corner)";
             } else {
-                const Score raw = kbkMopup(pos, stronger);
+                const Score raw = applyCountingUrgency(kbkMopup(pos, stronger), pos);
                 mopup = (stronger == WHITE) ? raw : static_cast<Score>(-static_cast<int>(raw));
                 egDesc = (stronger == WHITE) ? "KBK win (white)" : "KBK win (black)";
             }
         } else {
-            const Score raw = mopupBonus(pos, stronger);
+            const Score raw = applyCountingUrgency(mopupBonus(pos, stronger), pos);
             mopup = (stronger == WHITE) ? raw : static_cast<Score>(-static_cast<int>(raw));
             egDesc = (stronger == WHITE) ? "win (white)" : "win (black)";
         }

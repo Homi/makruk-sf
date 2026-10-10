@@ -5,6 +5,7 @@
 // Makruk-SF-specific modifications maintained by Homi <bhome1@hotmail.com>.
 
 #include "makruk_eval.h"
+#include "makruk_counting.h"
 #include "../evaluate.h"
 #include "../position.h"
 #include <cassert>
@@ -246,6 +247,51 @@ static void testKRKKingCloseBonus() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 16: Counting-danger awareness — mop-up bonus grows as the counting
+// clock (count/limit) approaches its limit, holding position fixed.
+// ---------------------------------------------------------------------------
+static void testCountingUrgencyAmplifiesMopup() {
+    const std::string name = "testCountingUrgencyAmplifiesMopup";
+    // White K+R vs bare Black king — counting-eligible (no pawns anywhere).
+    Position pos; StateListPtr st;
+    setPos(pos, st, "k7/8/8/8/8/8/8/R3K3 w - - 0 1");
+
+    MakrukCountingState& cs = pos.state()->makrukCounting;
+    assert(cs.active && "KRK vs bare king must be counting-eligible");
+    assert(cs.limit == CountingLimits::Rook && "KRK limit must be Rook (32 plies)");
+
+    cs.count = 0;
+    const Value vLow = makrukClassicalEval(pos);
+
+    cs.count = cs.limit - 1;   // nearly at the counting-draw limit
+    const Value vHigh = makrukClassicalEval(pos);
+
+    assert(vHigh > vLow && "Mop-up bonus must grow as the counting limit approaches");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: Counting-danger awareness is a no-op when counting isn't active
+// (e.g. the stronger side still has a pawn, so eligibility never activates).
+// ---------------------------------------------------------------------------
+static void testCountingUrgencyNoOpWhenInactive() {
+    const std::string name = "testCountingUrgencyNoOpWhenInactive";
+    // White K+R+P vs bare Black king — NOT counting-eligible (a pawn remains).
+    Position pos; StateListPtr st;
+    setPos(pos, st, "k7/8/8/8/8/8/P7/R3K3 w - - 0 1");
+
+    MakrukCountingState& cs = pos.state()->makrukCounting;
+    assert(!cs.active && "A remaining pawn must keep counting inactive");
+
+    const Value vBefore = makrukClassicalEval(pos);
+    cs.count = 1000;   // should be ignored entirely while inactive
+    const Value vAfter = makrukClassicalEval(pos);
+
+    assert(vBefore == vAfter && "Urgency must not apply when counting is inactive");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -266,6 +312,8 @@ void runMakrukEvalTests() {
     testKBKIsDraw();
     testKNNKIsDraw();
     testKRKKingCloseBonus();
+    testCountingUrgencyAmplifiesMopup();
+    testCountingUrgencyNoOpWhenInactive();
 
     // ---------------------------------------------------------------------------
     // NNUE smoke tests — run after all classical tests.
