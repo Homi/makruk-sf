@@ -20,6 +20,9 @@ namespace Nebula{
     mainHistory.fill(0);
     captureHistory.fill(0);
     pawnCorrectionHistory.fill(0);
+    materialCorrectionHistory.fill(0);
+    minorPieceCorrectionHistory.fill(0);
+    nonPawnCorrectionHistory.fill(0);
     previousDepth=0;
     for (const bool inCheck : {false,true})
       for (const StatsType c : {NoCaptures,Captures}){

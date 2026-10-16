@@ -41,6 +41,9 @@ namespace Nebula{
     CapturePieceToHistory captureHistory;
     ContinuationHistory continuationHistory[2][2];
     PawnCorrectionHistory pawnCorrectionHistory;
+    MaterialCorrectionHistory materialCorrectionHistory;
+    MinorPieceCorrectionHistory minorPieceCorrectionHistory;
+    NonPawnCorrectionHistory nonPawnCorrectionHistory;
     Score trend;
   };
 

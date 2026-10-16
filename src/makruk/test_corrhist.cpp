@@ -106,6 +106,9 @@ void runCorrectionHistoryTests() {
 
         th->pawnCorrectionHistory[WHITE][42] << PawnCorrHistUpdateCap;
         th->pawnCorrectionHistory[BLACK][1000] << -PawnCorrHistUpdateCap;
+        th->materialCorrectionHistory[WHITE][42] << PawnCorrHistUpdateCap;
+        th->minorPieceCorrectionHistory[WHITE][42] << PawnCorrHistUpdateCap;
+        th->nonPawnCorrectionHistory[WHITE][42] << PawnCorrHistUpdateCap;
         check(static_cast<int16_t>(th->pawnCorrectionHistory[WHITE][42]) != 0,
               "poked entry is nonzero before clear()");
         th->clear();
@@ -113,6 +116,12 @@ void runCorrectionHistoryTests() {
               "Thread::clear() resets pawnCorrectionHistory[WHITE][42]");
         check(static_cast<int16_t>(th->pawnCorrectionHistory[BLACK][1000]) == 0,
               "Thread::clear() resets pawnCorrectionHistory[BLACK][1000]");
+        check(static_cast<int16_t>(th->materialCorrectionHistory[WHITE][42]) == 0,
+              "Thread::clear() resets materialCorrectionHistory[WHITE][42]");
+        check(static_cast<int16_t>(th->minorPieceCorrectionHistory[WHITE][42]) == 0,
+              "Thread::clear() resets minorPieceCorrectionHistory[WHITE][42]");
+        check(static_cast<int16_t>(th->nonPawnCorrectionHistory[WHITE][42]) == 0,
+              "Thread::clear() resets nonPawnCorrectionHistory[WHITE][42]");
 
         StateListPtr st;
         Position pos;
@@ -142,6 +151,36 @@ void runCorrectionHistoryTests() {
         const Value out3 = Search::correctedStaticEval(ev3, BLACK, pos, th);
         check(out3 > VALUE_TB_LOSS_IN_MAX_PLY, "saturated-negative correction stays above TB-loss range");
         check(out3 < VALUE_TB_WIN_IN_MAX_PLY, "saturated-negative correction stays below TB-win range");
+
+        // The 4 tables combine additively: poking material/minor-piece/non-pawn
+        // on top of an already-saturated pawn table (WHITE, idx) should push the
+        // correction further positive than the pawn table alone did.
+        th->clear();
+        th->pawnCorrectionHistory[WHITE][pos.pawnKey() & (PawnCorrHistSize - 1)] << PawnCorrHistUpdateCap;
+        const Value outPawnOnly = Search::correctedStaticEval(ev1, WHITE, pos, th);
+        th->materialCorrectionHistory[WHITE][pos.materialKey() & (MaterialCorrHistSize - 1)] << PawnCorrHistUpdateCap;
+        th->minorPieceCorrectionHistory[WHITE][pos.minorPieceKey() & (MinorPieceCorrHistSize - 1)] << PawnCorrHistUpdateCap;
+        th->nonPawnCorrectionHistory[WHITE][pos.nonPawnKey(WHITE) & (NonPawnCorrHistSize - 1)] << PawnCorrHistUpdateCap;
+        const Value outAllFour = Search::correctedStaticEval(ev1, WHITE, pos, th);
+        check(outAllFour > outPawnOnly, "material/minor/non-pawn tables add on top of the pawn table's correction");
+
+        // Saturate ALL 4 tables in the same direction (each clamps to +-64
+        // individually, so uncapped they'd sum to +-256) -- the combined total
+        // cap (CorrHistTotalMaxCorrection=100) must still keep the result
+        // inside the TB-safe range, same as the single-table case above.
+        th->clear();
+        for (int i = 0; i < 200; ++i) {
+            th->pawnCorrectionHistory[WHITE][pos.pawnKey() & (PawnCorrHistSize - 1)] << PawnCorrHistUpdateCap;
+            th->materialCorrectionHistory[WHITE][pos.materialKey() & (MaterialCorrHistSize - 1)] << PawnCorrHistUpdateCap;
+            th->minorPieceCorrectionHistory[WHITE][pos.minorPieceKey() & (MinorPieceCorrHistSize - 1)] << PawnCorrHistUpdateCap;
+            th->nonPawnCorrectionHistory[WHITE][pos.nonPawnKey(WHITE) & (NonPawnCorrHistSize - 1)] << PawnCorrHistUpdateCap;
+        }
+        const Value ev4 = static_cast<Value>(VALUE_TB_WIN_IN_MAX_PLY - 1);
+        const Value out4 = Search::correctedStaticEval(ev4, WHITE, pos, th);
+        check(out4 < VALUE_TB_WIN_IN_MAX_PLY, "all 4 tables saturated together stays below TB-win range");
+        check(out4 > VALUE_TB_LOSS_IN_MAX_PLY, "all 4 tables saturated together stays above TB-loss range");
+        check(static_cast<int>(out4) - static_cast<int>(ev4) <= CorrHistTotalMaxCorrection,
+              "all 4 tables saturated together never exceeds the combined total cap");
 
         threads.set(0);
     }
