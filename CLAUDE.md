@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 36, 2026-10-16)
+## Current Status (as of Round 37, 2026-10-16)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-36 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-37 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -222,16 +222,23 @@ When working in this repository:
   Instead it pulled both seeds *down* relative to Round 35 alone (+7→0, +25→-25) — a net
   negative, reverted cleanly. This closes out all three "not yet implemented" classical-eval
   ideas (counting-danger, promotion-race, rook-trap); only promotion-race urgency (Round 35)
-  showed a positive signal, and it stands alone.
+  showed a positive signal, and it stands alone. Round 37 then tried a broader, more standard
+  technique not on that original list — a general piece-mobility *bonus* (Knight/Khon/Rook/
+  Met) stacked on Round 35 — and also regressed relative to Round 35 alone (-30/-37, both
+  seeds consistently negative). Reverted.
 * **Next priority**: every lever tried since Round 27 except Round 35 has failed to land
-  positive across repeated testing, and Round 36 showed that stacking isn't automatically
-  additive — a second positive-leaning change can still net negative. With blend-gate tuning
-  and all three classical-eval ideas now closed out, the remaining open items are: (1) Round
-  29's untuned correction-history constants, un-swept if revisited; (2) a deeper, riskier
-  version of rook-trap risk that actually checks capturability (the condition this round
-  deliberately avoided for safety) rather than raw mobility; (3) accepting Round 35 alone as
-  the best classical-eval candidate so far and looking for an entirely new lever outside this
-  session's explored space. None of these is a quick next step the way Rounds 32-36 were.
+  positive across repeated testing, and **two independent stacking attempts in a row**
+  (Rounds 36, 37 — mechanically unrelated to each other) both eroded Round 35's signal rather
+  than compounding it. This is suggestive that Round 35's gain is fragile to further additions
+  rather than a coincidence specific to either mechanism tried. With blend-gate tuning and
+  every classical-eval idea tried so far now closed out, the remaining open items are: (1)
+  Round 29's untuned correction-history constants, un-swept if revisited; (2) a deeper, riskier
+  rook-trap-risk version that checks actual capturability instead of raw mobility; (3)
+  retuning *existing* eval terms' weights jointly with Round 35 rather than adding a new
+  isolated term, since isolated additions have a 0-for-2 record now; (4) accepting Round 35
+  alone as the standing candidate and looking for a lever outside this session's explored
+  space entirely (NNUE L1=1024 paired with larger L2/L3, a training-recipe sweep, etc.). None
+  of these is a quick next step the way Rounds 32-37 were.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -856,6 +863,46 @@ alone doesn't distinguish a genuinely endangered rook from a quietly well-placed
 "is it actually attacked" condition this round deliberately avoided, accepting the
 higher implementation-risk tradeoff that was sidestepped here.
 
+### Round 37 — Piece Mobility Bonus Stacked on Round 35 — Regression, Reverted (2026-10-16)
+
+User asked directly whether any lever remained after Round 36 closed out the classical-eval
+"not yet implemented" list. Proposed and tried a broader, more standard technique not on that
+original list: a general per-square mobility *bonus* (reward, not penalty) for Knight, Khon,
+Rook, and Met — distinct from Round 36's reverted `rookTrapRisk()` (which only penalized
+near-zero mobility as a danger signal). Per-square values scaled roughly inversely to each
+piece type's maximum possible mobility in Makruk (Khon/Met are short-range step pieces, max
+5/4 squares; Knight max 8; Rook the only slider, max 14) so each piece type's maximum bonus
+lands in a similar ~25-40cp band. Correctly used the color-dependent `khonAttacksBb(c, sq)`
+for Khon (its forward direction differs by color; the color-blind `pseudoAttacks[BISHOP]`
+union would have been wrong). Five new tests verified exact per-piece-type values via the
+`makrukEvalReport()` string at a known corner square. Full verification gate passed clean
+(`build_tests.sh` 27/27, `build_verify.sh`, `perft 5` exact).
+
+**Gauntlet, 2 seeds vs Fairy-Stockfish-NNUE — stacking regressed again:**
+
+| Seed | Round 37 (mobility + promotion-race) | Round 35 alone (ref) | Round 27 (ref) |
+|---|---|---|---|
+| 99 | 0W 85D 115L → -228 | -198 (Δ **-30**) | -205 (Δ -23) |
+| 4242 | 1W 89D 110L → -212 | -175 (Δ **-37**) | -200 (Δ -12) |
+
+Both seeds shifted consistently negative relative to Round 35 alone (-30/-37, within 7 Elo of
+each other) — the **second** stacking attempt in a row (after Round 36's rook-trap risk) that
+erodes rather than compounds the signal. **Reverted cleanly** (pure addition since Round 35's
+commit, so `git checkout` restored byte-identical files; rebuilt and re-verified).
+
+**Takeaway**: two independent classical-eval additions (a narrow trap-risk penalty, a broad
+mobility bonus) have now both hurt when stacked on Round 35, despite being mechanically
+unrelated to each other and to promotion-race urgency itself. This is suggestive, not just
+two isolated bad calibrations: adding *any* second eval term on top of Round 35 has so far
+made things worse, which could mean either (a) Round 35's own positive signal is fragile/
+coincidental and further changes simply add noise that overwhelms it, or (b) this classical
+eval already sits near a local optimum where additional heuristics of this complexity level
+tend to interfere with existing terms (PST, rook activity, king safety) in ways that cost
+more than they add, consistent with every stacking attempt this session actively losing
+ground. Round 35 alone remains the standing candidate; further classical-eval additions on
+top of it are not obviously promising without a different approach (e.g. retuning existing
+terms' weights jointly with a new one, rather than adding a new term in isolation).
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -879,6 +926,7 @@ higher implementation-risk tradeoff that was sidestepped here.
 | Round 34 (blend gate narrowed 300→200cp, on top of Round 33's fix) | -220/-222 | -15/-22 | both seeds agree (negative), tight 2-Elo agreement — small consistent regression, not deployed; closes out blend-gate tuning as a lever (both directions now regress) |
 | Round 35 (classical eval: promotion-race urgency) | -198/-175/-215 | +7/+25/+29 | all 3 seeds positive (avg +20) — strongest multi-seed signal since Round 27, but no single seed clears the noise band; kept, not yet "confirmed" by the strict bar |
 | Round 36 (rook-trap risk stacked on Round 35) | -205/-225 | 0/-25 | stacking made both seeds worse than Round 35 alone (+7→0, +25→-25) — net negative, reverted; closes out the classical-eval "not yet implemented" list |
+| Round 37 (piece mobility bonus stacked on Round 35) | -228/-212 | -23/-12 | both seeds consistently worse than Round 35 alone (-30/-37) — second stacking attempt in a row that regressed, reverted |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
