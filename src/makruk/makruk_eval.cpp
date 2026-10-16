@@ -162,6 +162,36 @@ static Score rookActivity(const Position& pos, Color c) {
     return s;
 }
 
+// Promotion-race urgency: a passed pawn (no enemy pawn can ever block or capture
+// it via passedPawnSpan()'s standard own-file-ahead + adjacent-files-ahead test)
+// gets a bonus that grows sharply the closer it is to promotion. Makruk pawns
+// only have 3 ranks to cross before promoting to Met (relativeRank 2 start ->
+// 4 one-step-away, promoting at 5), so "urgency" compresses into a short,
+// high-stakes race rather than the long march of chess passed pawns -- the
+// flat material+PST table alone (PawnPST's rank-4 eg values are actually
+// slightly negative) gives no signal that a one-step-from-promotion runner is
+// usually close to winning a full Met's worth of material.
+// Indexed by relativeRank - 2: pawns only ever occupy relativeRank 2 (start),
+// 3, or 4 (one step from promotion) -- relativeRank 5 is the promotion square
+// itself, where the piece has already become a Met.
+static constexpr Score PromotionUrgency[3] = {
+    S( 0,  0),   // relativeRank 2 (start rank) -- not advanced enough to matter yet
+    S( 0,  5),   // relativeRank 3 (2 steps from promotion)
+    S(15, 35),   // relativeRank 4 (1 step from promotion)
+};
+
+static Score promotionRaceUrgency(const Position& pos, Color c) {
+    Score s = SCORE_ZERO;
+    uint64_t pawns = pos.pieces(c, PAWN);
+    while (pawns) {
+        const Square sq = popLsb(pawns);
+        if (pos.pieces(~c, PAWN) & passedPawnSpan(c, sq)) continue; // not passed
+        const int r = static_cast<int>(relativeRank(c, sq));
+        s += static_cast<int>(PromotionUrgency[r - 2]);
+    }
+    return s;
+}
+
 // Bonus for own pawns shielding the king (MG only).
 static Score kingSafety(const Position& pos, Color c) {
     const Square ksq = pos.square<KING>(c);
@@ -354,6 +384,7 @@ Value makrukClassicalEval(const Position& pos) {
     for (Color c : {WHITE, BLACK}) {
         add(score, rookActivity(pos, c), c);
         add(score, kingSafety(pos, c), c);
+        add(score, promotionRaceUrgency(pos, c), c);
     }
 
     // Bare-king endgame handling: at most one side can be bare at a time.
@@ -388,12 +419,14 @@ std::string makrukEvalReport(const Position& pos) {
     Score matPST = evalMaterialAndPST(pos);
     Score rookBonus = SCORE_ZERO;
     Score kingBonus = SCORE_ZERO;
+    Score promoBonus = SCORE_ZERO;
     Score mopup     = SCORE_ZERO;
     const char* egDesc = "none";
 
     for (Color c : {WHITE, BLACK}) {
         add(rookBonus, rookActivity(pos, c), c);
         add(kingBonus, kingSafety(pos, c), c);
+        add(promoBonus, promotionRaceUrgency(pos, c), c);
     }
 
     for (Color stronger : {WHITE, BLACK}) {
@@ -421,6 +454,7 @@ std::string makrukEvalReport(const Position& pos) {
         static_cast<int>(matPST)   +
         static_cast<int>(rookBonus) +
         static_cast<int>(kingBonus) +
+        static_cast<int>(promoBonus) +
         static_cast<int>(mopup)
     );
     if (egDesc == std::string("draw (insufficient material)"))
@@ -436,6 +470,7 @@ std::string makrukEvalReport(const Position& pos) {
     ss << "  material+pst   : mg=" << mgValue(matPST)    << " eg=" << egValue(matPST)    << "\n";
     ss << "  rook activity  : mg=" << mgValue(rookBonus)  << " eg=" << egValue(rookBonus)  << "\n";
     ss << "  king safety    : mg=" << mgValue(kingBonus)  << " eg=" << egValue(kingBonus)  << "\n";
+    ss << "  promotion race : mg=" << mgValue(promoBonus) << " eg=" << egValue(promoBonus) << "\n";
     ss << "  mop-up         : mg=" << mgValue(mopup)      << " eg=" << egValue(mopup)      << "\n";
     ss << "  total          : mg=" << mgValue(total)      << " eg=" << egValue(total)      << "\n";
     ss << "  blended        : " << blended << " cp (white)\n";

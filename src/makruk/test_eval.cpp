@@ -320,6 +320,53 @@ static void testEvaluateUsesRealEvalBeforeCountingLimit() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 19: Promotion-race urgency — a PASSED pawn one step from promotion
+// scores higher than the same pawn when a pawn on an adjacent file blocks it
+// from being passed (passedPawnSpan), with both black pawns on PST-mirror-
+// equal squares (c-file vs f-file, same rank) so material/PST stay identical
+// between the two positions and only the urgency bonus differs.
+// ---------------------------------------------------------------------------
+static void testPromotionUrgencyRewardsPassedRunner() {
+    const std::string name = "testPromotionUrgencyRewardsPassedRunner";
+    // White pawn d5 (one step from promotion); Black pawn f6 does not block it.
+    Position posPassed; StateListPtr stP;
+    setPos(posPassed, stP, "4k3/8/5p2/3P4/8/8/8/4K3 w - - 0 1");
+
+    // Same, but Black pawn on c6 blocks d5 from being passed (adjacent file,
+    // within passedPawnSpan). c6/f6 are PST-mirror-equal, so material+PST for
+    // the black pawn is identical in both positions.
+    Position posBlocked; StateListPtr stB;
+    setPos(posBlocked, stB, "4k3/8/2p5/3P4/8/8/8/4K3 w - - 0 1");
+
+    const Value vPassed  = makrukClassicalEval(posPassed);
+    const Value vBlocked = makrukClassicalEval(posBlocked);
+    assert(vPassed > vBlocked
+           && "A passed one-step-from-promotion pawn must score higher than a blocked one");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 20: Promotion-race urgency gives no bonus on the start rank (too far
+// from promotion to matter yet) even for a fully passed pawn — same
+// passed-vs-blocked setup as above, but with the runner still on its start
+// rank, must evaluate identically.
+// ---------------------------------------------------------------------------
+static void testPromotionUrgencyZeroOnStartRank() {
+    const std::string name = "testPromotionUrgencyZeroOnStartRank";
+    Position posPassed; StateListPtr stP;
+    setPos(posPassed, stP, "4k3/8/8/8/5p2/3P4/8/4K3 w - - 0 1"); // d3 passed, f4 doesn't block
+
+    Position posBlocked; StateListPtr stB;
+    setPos(posBlocked, stB, "4k3/8/8/8/2p5/3P4/8/4K3 w - - 0 1"); // c4 blocks d3
+
+    const Value vPassed  = makrukClassicalEval(posPassed);
+    const Value vBlocked = makrukClassicalEval(posBlocked);
+    assert(vPassed == vBlocked
+           && "No promotion urgency bonus should apply on the pawn's start rank");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -343,6 +390,8 @@ void runMakrukEvalTests() {
     testCountingUrgencyAmplifiesMopup();
     testCountingUrgencyNoOpWhenInactive();
     testEvaluateUsesRealEvalBeforeCountingLimit();
+    testPromotionUrgencyRewardsPassedRunner();
+    testPromotionUrgencyZeroOnStartRank();
 
     // ---------------------------------------------------------------------------
     // NNUE smoke tests — run after all classical tests.

@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 34, 2026-10-16)
+## Current Status (as of Round 35, 2026-10-16)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-34 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-35 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -213,14 +213,17 @@ When working in this repository:
   (0/-30) but **kept anyway on correctness grounds** (resolved 2026-10-11). Round 34 then tried
   narrowing the blend gate (300→200, the untested opposite of Round 30) on top of Round 33's
   fix and also got a small, consistent regression (-15/-22) — both gate directions now
-  regress, closing out blend-gate tuning as a lever.
-* **Next priority**: every lever tried since Round 27 has failed to confirm a win (data,
-  search correction-history, blend gate in both directions, NNUE L1, counting-danger eval).
-  The two remaining genuinely untried directions are both classical-eval ideas from the "not
-  yet implemented" list — **promotion-race urgency** and **rook-trap risk** — mechanically
-  unrelated to counting-danger (Round 32) and blend-gate (Rounds 30/34), so not pre-judged by
-  either, and now with a real chance to matter during search given Round 33's fix. Round 29's
-  untuned correction-history constants also remain un-swept if revisited.
+  regress, closing out blend-gate tuning as a lever. Round 35 then tried the first of the two
+  remaining classical-eval ideas — promotion-race urgency — and got **both seeds positive**
+  for the first time since Round 27 (+7/+25), though neither clears the noise band, so it's
+  promising but not confirmed.
+* **Next priority**: every lever tried since Round 27 except Round 35 has failed to land
+  positive at both seeds. One classical-eval idea remains genuinely untried — **rook-trap
+  risk** — mechanically unrelated to the others and not pre-judged by any prior result. Worth
+  trying next and stacking with Round 35 to see if small positives compound toward something
+  that clears the noise band; a third seed on Round 35 alone (to try to confirm it in
+  isolation first) is the other reasonable next step. Round 29's untuned correction-history
+  constants also remain un-swept if revisited.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -742,6 +745,56 @@ two classical-eval ideas that remain genuinely untried are promotion-race urgenc
 rook-trap risk, both still live candidates and, like Round 32's mechanism, now have a real
 chance to matter during search given Round 33's fix.
 
+### Round 35 — Classical Eval: Promotion-Race Urgency — Promising but Not Confirmed (2026-10-16)
+
+The first of the two remaining classical-eval ideas, now with a real chance to matter during
+search given Round 33's fix (bare-king endgame logic is finally live). Makruk pawns promote
+to Met after only 3 ranks of advance (relativeRank 2 start → 5 promotion), so a passed pawn
+one step from promotion is usually close to winning a full Met's worth of material — but
+`PawnPST`'s existing rank-4 (one-step-from-promotion) eg values are actually slightly
+*negative*, giving no urgency signal at all.
+
+Added `promotionRaceUrgency()` in `makruk_eval.cpp`: reuses Stockfish's existing, already-
+tested passed-pawn bitboard helpers (`passedPawnSpan()`, `relativeRank()` from `bitboard.h`/
+`types.h` — present but previously unused by classical eval) rather than inventing new
+infrastructure. A tiered bonus (`PromotionUrgency[]`, indexed by `relativeRank - 2`: `S(0,0)`
+at the start rank, `S(0,5)` two steps out, `S(15,35)` one step from promotion) applies only to
+pawns with no enemy pawn in their `passedPawnSpan` (the standard "passed pawn" definition —
+deliberately not attempting full move-by-move unstoppability proof, which would carry the
+same subtle-bug risk class as the `seeGe()` bugs from Rounds 19-20). Wired into both
+`makrukClassicalEval()` and `makrukEvalReport()` (new "promotion race" report line). Two new
+tests isolate the effect cleanly: a passed vs. blocked runner on otherwise PST-identical
+positions (black pawn on c-file vs. mirror-equal f-file, same rank) at one-step-from-promotion
+(must differ) and at the start rank (must be identical, confirming the tiering gates
+correctly). Full verification gate passed (`build_tests.sh` 22/22, `build_verify.sh`,
+`perft 5` exact); spot-checked via `makrukeval` on both test positions, matching expected
+values exactly (15/35 vs 0/0).
+
+**Gauntlet, 2 seeds vs Fairy-Stockfish-NNUE — both positive, not yet confirmed:**
+
+| Seed | Round 35 (promotion-race urgency) | Round 27 (ref) | Delta |
+|---|---|---|---|
+| 99 | 0W 97D 103L → -198 | -205 | **+7** |
+| 4242 | 0W 107D 93L → -175 | -200 | **+25** |
+
+Both seeds landed positive — the first same-sign-positive result at both seeds since Round 27
+itself (Round 28 was sign-flipped; every other round since has been flat or negative at both).
+But neither delta individually clears the ~46 Elo single-seed noise band, so by this
+project's own standing bar (both seeds agree *and* at least one clears the band) this is
+**not yet a confirmed win** — it's the most encouraging signal since Round 27, not a proven
+one. Not deployed to main's net-selection state (no net involved anyway); kept on branch
+`classical-eval-new-heuristics`, committed locally, not merged, pending either a third seed
+to break the tie or a decision to keep it on the same zero-risk/well-motivated grounds as
+Round 33's fix.
+
+**Takeaway**: unlike every classical-eval/search-constant attempt since Round 27 (correction
+history, blend gate × 2, counting-danger), this is the first one that didn't land flat or
+negative at both seeds. Still far short of the +50/+55 Elo needed to reach the -150 target on
+its own, but it reopens the question of whether classical-eval heuristics genuinely help now
+that Round 33's fix makes the bare-king endgame branch live — worth stacking with rook-trap
+risk (the remaining untried idea) to see if small positives compound, rather than treating
+this round in isolation.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -763,6 +816,7 @@ chance to matter during search given Round 33's fix.
 | Round 32 (classical eval: counting-danger awareness) | -228/-228 | -23/-28 | both seeds landed identical (0W 85D 115L) — later found to be dead code during real search (see Round 33), so this was almost certainly noise, not a real effect |
 | Round 33 (fix: `evaluate.cpp` no longer blinds whole counting-eligible endgames) | -205/-230 | 0/-30 | one seed flat, one down 30 — inconclusive by this project's bar; kept anyway on correctness grounds (resolved 2026-10-11) |
 | Round 34 (blend gate narrowed 300→200cp, on top of Round 33's fix) | -220/-222 | -15/-22 | both seeds agree (negative), tight 2-Elo agreement — small consistent regression, not deployed; closes out blend-gate tuning as a lever (both directions now regress) |
+| Round 35 (classical eval: promotion-race urgency) | -198/-175 | +7/+25 | both seeds positive — first same-sign-positive result since Round 27 — but neither clears the noise band; promising, not confirmed |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
