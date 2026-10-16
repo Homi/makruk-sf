@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 35, 2026-10-16)
+## Current Status (as of Round 36, 2026-10-16)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-35 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-36 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -217,14 +217,21 @@ When working in this repository:
   remaining classical-eval ideas — promotion-race urgency — and got all **three seeds
   positive** (+7/+25/+29, avg +20) — the strongest multi-seed signal of any lever since
   Round 27, though no single seed clears the noise band, so it's kept but not yet "confirmed"
-  by the project's strict single-round bar.
+  by the project's strict single-round bar. Round 36 then tried the last classical-eval idea —
+  rook-trap risk — stacked on top of Round 35, hoping two small positives would compound.
+  Instead it pulled both seeds *down* relative to Round 35 alone (+7→0, +25→-25) — a net
+  negative, reverted cleanly. This closes out all three "not yet implemented" classical-eval
+  ideas (counting-danger, promotion-race, rook-trap); only promotion-race urgency (Round 35)
+  showed a positive signal, and it stands alone.
 * **Next priority**: every lever tried since Round 27 except Round 35 has failed to land
-  positive across repeated testing. One classical-eval idea remains genuinely untried —
-  **rook-trap risk** — mechanically unrelated to the others and not pre-judged by any prior
-  result. Worth trying next and stacking with Round 35 to see if the two small positives
-  compound toward something that clears the noise band outright — the most promising path to
-  the -150 target currently open. Round 29's untuned correction-history constants also remain
-  un-swept if revisited.
+  positive across repeated testing, and Round 36 showed that stacking isn't automatically
+  additive — a second positive-leaning change can still net negative. With blend-gate tuning
+  and all three classical-eval ideas now closed out, the remaining open items are: (1) Round
+  29's untuned correction-history constants, un-swept if revisited; (2) a deeper, riskier
+  version of rook-trap risk that actually checks capturability (the condition this round
+  deliberately avoided for safety) rather than raw mobility; (3) accepting Round 35 alone as
+  the best classical-eval candidate so far and looking for an entirely new lever outside this
+  session's explored space. None of these is a quick next step the way Rounds 32-36 were.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -805,8 +812,49 @@ history, blend gate × 2, counting-danger), this is the first one that didn't la
 negative across repeated testing. Still far short of the +50/+55 Elo needed to reach the -150
 target on its own (even the 3-seed average of +20 falls short), but it's real evidence that
 classical-eval heuristics can help now that Round 33's fix makes the bare-king endgame branch
-live — worth stacking with rook-trap risk (the remaining untried idea) next to see if the two
-small positives compound toward something that clears the noise band outright.
+live.
+
+### Round 36 — Classical Eval: Rook-Trap Risk Stacked on Round 35 — Regression, Reverted (2026-10-16)
+
+The last "not yet implemented" classical-eval idea, tried by stacking it on top of Round 35's
+kept promotion-race urgency to test whether two small positives compound. Added
+`rookTrapRisk()` to `makruk_eval.cpp`: a tiered penalty (`S(-60,-40)` at mobility 0, `S(-25,
+-15)` at mobility 1) for a rook with very few reachable squares, computed via
+`attacksBb<ROOK>(sq, occupied) & ~ownPieces` — reusing the engine's existing, already-tested
+magic-bitboard sliding-attack generator rather than attempting a full move-by-move
+"is it actually capturable" proof (deliberately scoped away from that `seeGe()`-class bug
+risk, same reasoning as Round 35). Three new tests verified the exact tiered penalty via the
+`makrukEvalReport()` string directly (isolating the component cleanly from any PST/material
+confound). Full verification gate passed clean (`build_tests.sh` 25/25, `build_verify.sh`,
+`perft 5` exact).
+
+**Gauntlet, 2 seeds vs Fairy-Stockfish-NNUE — stacking made things worse, not better:**
+
+| Seed | Round 36 (rook-trap + promotion-race) | Round 35 alone (ref) | Round 27 (ref) | Delta vs R27 |
+|---|---|---|---|---|
+| 99 | 0W 94D 106L → -205 | -198 | -205 | **0** |
+| 4242 | 0W 86D 114L → -225 | -175 | -200 | **-25** |
+
+Adding rook-trap risk pulled *both* seeds down relative to Round 35 alone (+7→0 at seed 99,
++25→-25 at seed 4242) — the opposite of compounding. This specific mechanism is a net
+negative on its own, not merely neutral. **Reverted cleanly**: `rookTrapRisk()`, its call
+sites, and its three tests all removed; rebuilt and re-verified
+(`build_verify.sh` + `perft 5` exact) to confirm this restores exactly Round 35's tested
+state (promotion-race urgency alone, no rook-trap component).
+
+**Takeaway**: closes out the "not yet implemented" classical-eval list — all three ideas
+(counting-danger, promotion-race urgency, rook-trap risk) have now been tried; only
+promotion-race urgency (Round 35) showed a positive signal, and it stands alone, not
+stacked. A plausible explanation for why mobility-based trap risk hurts rather than helps:
+penalizing *any* low-mobility rook regardless of whether it's actually in danger likely
+discourages legitimately strong rook placements (e.g., a rook temporarily boxed in while
+supporting an attack, or one guarding a key square) at least as often as it catches real
+danger — the "deliberately not proving actual capturability" scoping decision that kept this
+round low-risk to implement may be exactly why it doesn't work as a *signal*, since mobility
+alone doesn't distinguish a genuinely endangered rook from a quietly well-placed one. Round
+35 remains the standing candidate; a future revisit of rook-trap risk would need to add the
+"is it actually attacked" condition this round deliberately avoided, accepting the
+higher implementation-risk tradeoff that was sidestepped here.
 
 ---
 
@@ -830,6 +878,7 @@ small positives compound toward something that clears the noise band outright.
 | Round 33 (fix: `evaluate.cpp` no longer blinds whole counting-eligible endgames) | -205/-230 | 0/-30 | one seed flat, one down 30 — inconclusive by this project's bar; kept anyway on correctness grounds (resolved 2026-10-11) |
 | Round 34 (blend gate narrowed 300→200cp, on top of Round 33's fix) | -220/-222 | -15/-22 | both seeds agree (negative), tight 2-Elo agreement — small consistent regression, not deployed; closes out blend-gate tuning as a lever (both directions now regress) |
 | Round 35 (classical eval: promotion-race urgency) | -198/-175/-215 | +7/+25/+29 | all 3 seeds positive (avg +20) — strongest multi-seed signal since Round 27, but no single seed clears the noise band; kept, not yet "confirmed" by the strict bar |
+| Round 36 (rook-trap risk stacked on Round 35) | -205/-225 | 0/-25 | stacking made both seeds worse than Round 35 alone (+7→0, +25→-25) — net negative, reverted; closes out the classical-eval "not yet implemented" list |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
