@@ -21,6 +21,7 @@
 // Makruk-SF is a GPLv3 project derived from sf-kernel / Stockfish.
 // Makruk-SF-specific modifications maintained by Homi <bhome1@hotmail.com>.
 
+#include "../movegen.h"
 #include "../movepick.h"
 #include "../position.h"
 #include "../search.h"
@@ -29,6 +30,7 @@
 #include <cstdlib>
 #include <deque>
 #include <iostream>
+#include <random>
 #include <string>
 
 namespace Nebula {
@@ -142,6 +144,109 @@ void runCorrectionHistoryTests() {
         check(out3 < VALUE_TB_WIN_IN_MAX_PLY, "saturated-negative correction stays below TB-win range");
 
         threads.set(0);
+    }
+
+    // 5. materialKey/minorPieceKey/nonPawnKey: full-recompute-every-move design
+    //    (see position.h's StateInfo comment) -- these checks exercise the
+    //    actual doMove()/set() call sites, not the recompute logic in isolation,
+    //    since there is no separate "incremental" path to cross-check against.
+    {
+        StateListPtr st;
+        Position pos;
+        setPos(pos, st, "rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1");
+        const uint64_t mat0 = pos.materialKey();
+        const uint64_t minor0 = pos.minorPieceKey();
+        const uint64_t npW0 = pos.nonPawnKey(WHITE);
+        const uint64_t npB0 = pos.nonPawnKey(BLACK);
+
+        // A quiet pawn push changes none of these (no capture, no minor/non-pawn
+        // piece moved).
+        st->emplace_back();
+        pos.doMove(makeMove(SQ_D3, SQ_D4), st->back());
+        check(pos.materialKey() == mat0, "quiet pawn push leaves materialKey unchanged");
+        check(pos.minorPieceKey() == minor0, "quiet pawn push leaves minorPieceKey unchanged");
+        check(pos.nonPawnKey(WHITE) == npW0, "quiet pawn push leaves White nonPawnKey unchanged");
+        check(pos.nonPawnKey(BLACK) == npB0, "quiet pawn push leaves Black nonPawnKey unchanged");
+
+        // A knight move changes minorPieceKey and that side's nonPawnKey, but not
+        // materialKey (no capture) and not the opponent's nonPawnKey. (b1-d2, not
+        // the chess-familiar b1-c3/a3, because Makruk's start position has pawns
+        // on all of rank 3, blocking both of those.)
+        st->emplace_back();
+        pos.doMove(makeMove(SQ_B1, SQ_D2), st->back());
+        check(pos.materialKey() == mat0, "quiet knight move leaves materialKey unchanged");
+        check(pos.minorPieceKey() != minor0, "quiet knight move changes minorPieceKey");
+        check(pos.nonPawnKey(WHITE) != npW0, "quiet knight move changes White nonPawnKey");
+        check(pos.nonPawnKey(BLACK) == npB0, "quiet knight move leaves Black nonPawnKey unchanged");
+    }
+    {
+        // A capture changes materialKey (piece count changed) and the captured
+        // side's nonPawnKey (its piece is gone); if the captured piece is a
+        // minor, minorPieceKey changes too.
+        StateListPtr st;
+        Position pos;
+        setPos(pos, st, "4k3/8/8/4n3/4R3/8/8/4K3 w - - 0 1"); // White Rook e4, Black Knight e5 (same file)
+        const uint64_t mat0 = pos.materialKey();
+        const uint64_t minor0 = pos.minorPieceKey();
+        const uint64_t npB0 = pos.nonPawnKey(BLACK);
+        st->emplace_back();
+        pos.doMove(makeMove(SQ_E4, SQ_E5), st->back()); // Rxe5, capturing the knight
+        check(pos.materialKey() != mat0, "capturing a knight changes materialKey");
+        check(pos.minorPieceKey() != minor0, "capturing a knight changes minorPieceKey");
+        check(pos.nonPawnKey(BLACK) != npB0, "capturing Black's knight changes Black's nonPawnKey");
+    }
+    {
+        // Promotion changes materialKey (pawn count down, Met count up) and the
+        // promoting side's nonPawnKey (a new Met appears), but not minorPieceKey
+        // (Met is not a minor piece).
+        StateListPtr st;
+        Position pos;
+        // White pawn e5 (relativeRank 4, one step from promotion); e6 is the
+        // promotion square (relativeRank 5).
+        setPos(pos, st, "4k3/8/8/4P3/8/8/8/4K3 w - - 0 1");
+        const uint64_t mat0 = pos.materialKey();
+        const uint64_t minor0 = pos.minorPieceKey();
+        const uint64_t npW0 = pos.nonPawnKey(WHITE);
+        st->emplace_back();
+        pos.doMove(make<PROMOTION>(SQ_E5, SQ_E6, QUEEN), st->back());
+        check(pos.materialKey() != mat0, "promotion changes materialKey");
+        check(pos.minorPieceKey() == minor0, "promotion to Met does not change minorPieceKey");
+        check(pos.nonPawnKey(WHITE) != npW0, "promotion changes the promoting side's nonPawnKey");
+    }
+    {
+        // Robustness: random-walk game, confirming no crash and that doMove()'s
+        // maintained keys always match an independent fresh recompute (loading
+        // the resulting FEN via a brand-new Position::set() call) -- this is a
+        // genuine integration check (catches a missed/mismatched call site)
+        // even though both paths ultimately call the same recomputeAuxKeys().
+        StateListPtr st;
+        Position pos;
+        setPos(pos, st, "rnsmksnr/8/pppppppp/8/8/PPPPPPPP/8/RNSKMSNR w - - 0 1");
+        std::mt19937 rng(0xC077EC7);
+        int plies = 0;
+        for (; plies < 300; ++plies) {
+            MoveList<LEGAL> moves(pos);
+            if (moves.size() == 0)
+                break;
+            std::uniform_int_distribution<size_t> pick(0, moves.size() - 1);
+            const Move m = moves.begin()[pick(rng)];
+            st->emplace_back();
+            pos.doMove(m, st->back());
+
+            StateListPtr freshSt;
+            Position freshPos;
+            setPos(freshPos, freshSt, pos.fen());
+            check(pos.materialKey() == freshPos.materialKey(),
+                  "materialKey matches a fresh recompute at ply " + std::to_string(plies));
+            check(pos.minorPieceKey() == freshPos.minorPieceKey(),
+                  "minorPieceKey matches a fresh recompute at ply " + std::to_string(plies));
+            check(pos.nonPawnKey(WHITE) == freshPos.nonPawnKey(WHITE),
+                  "White nonPawnKey matches a fresh recompute at ply " + std::to_string(plies));
+            check(pos.nonPawnKey(BLACK) == freshPos.nonPawnKey(BLACK),
+                  "Black nonPawnKey matches a fresh recompute at ply " + std::to_string(plies));
+        }
+        std::cout << "  aux-key random walk: " << plies << " plies, "
+                  << g_checks << " total checks so far\n";
     }
 
     if (g_fail) {
