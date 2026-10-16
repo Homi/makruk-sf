@@ -68,6 +68,15 @@ namespace Nebula{
     threads.clear();
   }
 
+  Value Search::correctedStaticEval(const Value ev, const Color us, const Position& pos,
+      const Thread* th){
+    const int16_t entry=th->pawnCorrectionHistory[us][pos.pawnKey()&(PawnCorrHistSize-1)];
+    const Value correction=std::clamp(static_cast<Value>(entry/PawnCorrHistGrain),
+      static_cast<Value>(-PawnCorrHistMaxCorrection),static_cast<Value>(PawnCorrHistMaxCorrection));
+    return std::clamp(static_cast<Value>(ev+correction),
+      VALUE_TB_LOSS_IN_MAX_PLY+1,VALUE_TB_WIN_IN_MAX_PLY-1);
+  }
+
   void MainThread::search(){
     const Color us=rootPos.stm();
     time.init(limits,us,rootPos.gameply());
@@ -364,6 +373,7 @@ namespace Nebula{
           ss->staticEval=eval=evaluate(pos,&complexity);
         else
           complexity=abs(ss->staticEval);
+        eval=correctedStaticEval(eval,us,pos,thisThread);
         if (ttValue!=VALUE_NONE
           &&tte->bound()&(ttValue>eval?BOUND_LOWER:BOUND_UPPER))
           eval=ttValue;
@@ -372,6 +382,7 @@ namespace Nebula{
         ss->staticEval=eval=evaluate(pos,&complexity);
         if (!excludedMove)
           tte->save(posKey,VALUE_NONE,ss->ttPv,BOUND_NONE,DEPTH_NONE,MOVE_NONE,eval);
+        eval=correctedStaticEval(eval,us,pos,thisThread);
       }
       thisThread->complexityAverage.update(complexity);
       if (isOk((ss-1)->currentMove)&&!(ss-1)->inCheck&&!priorCapture){
@@ -432,7 +443,7 @@ namespace Nebula{
           &&tte->depth()>=depth-3
           &&ttValue!=VALUE_NONE
           &&ttValue<probCutBeta)){
-        MovePicker mp(pos,ttMove,probCutBeta-ss->staticEval,depth-3,&captureHistory);
+        MovePicker mp(pos,ttMove,probCutBeta-eval,depth-3,&captureHistory);
         while ((move=mp.nextMove())!=MOVE_NONE)
           if (move!=excludedMove&&pos.legal(move)){
             ss->currentMove=move;
@@ -713,6 +724,15 @@ namespace Nebula{
         tte->save(posKey,valueToTt(bestValue,ss->ply),ss->ttPv,
           bestValue>=beta?BOUND_LOWER:pvNode&&bestMove?BOUND_EXACT:BOUND_UPPER,
           depth,bestMove,ss->staticEval);
+      if (!ss->inCheck
+        &&!excludedMove
+        &&ss->staticEval!=VALUE_NONE
+        &&abs(bestValue)<VALUE_TB_WIN_IN_MAX_PLY){
+        const int bonus=std::clamp(
+          (static_cast<int>(bestValue)-static_cast<int>(ss->staticEval))*static_cast<int>(depth),
+          -PawnCorrHistUpdateCap,PawnCorrHistUpdateCap);
+        thisThread->pawnCorrectionHistory[us][pos.pawnKey()&(PawnCorrHistSize-1)]<<bonus;
+      }
       return bestValue;
     }
 

@@ -40,6 +40,7 @@ namespace Nebula{
     ButterflyHistory mainHistory;
     CapturePieceToHistory captureHistory;
     ContinuationHistory continuationHistory[2][2];
+    PawnCorrectionHistory pawnCorrectionHistory;
     Score trend;
   };
 

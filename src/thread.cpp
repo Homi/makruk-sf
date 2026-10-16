@@ -19,6 +19,7 @@ namespace Nebula{
     counterMoves.fill(MOVE_NONE);
     mainHistory.fill(0);
     captureHistory.fill(0);
+    pawnCorrectionHistory.fill(0);
     previousDepth=0;
     for (const bool inCheck : {false,true})
       for (const StatsType c : {NoCaptures,Captures}){

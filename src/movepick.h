@@ -48,6 +48,19 @@ namespace Nebula{
   using PieceToHistory = Statistics<int16_t, 29952, PIECE_NB, SQUARE_NB>;
   using ContinuationHistory = Statistics<PieceToHistory, NOT_USED, PIECE_NB, SQUARE_NB>;
 
+  // Pawn correction history (Round 29): corrects a systematic static-eval bias keyed by
+  // pawn structure (Position::pawnKey()), analogous to modern Stockfish's correction
+  // history. Untuned first-pass constants -- see CLAUDE.md Round 29 for rationale.
+  // Grain * MaxCorrection == Divisor by design, so the table's own decay-saturation
+  // ceiling and the hard correction clamp in Search::correctedStaticEval() agree.
+  constexpr int PawnCorrHistSize          = 16384;  // 2^14, power-of-two index range
+  constexpr int PawnCorrHistDivisor       = 1024;   // decay divisor D for StatsEntry<<
+  constexpr int PawnCorrHistUpdateCap     = 256;    // clamp on bonus fed into <<
+  constexpr int PawnCorrHistGrain         = 16;     // divisor converting entry -> cp
+  constexpr int PawnCorrHistMaxCorrection = 64;     // hard clamp on applied correction, cp
+
+  using PawnCorrectionHistory = Statistics<int16_t, PawnCorrHistDivisor, COLOR_NB, PawnCorrHistSize>;
+
   class MovePicker{
     enum PickType :uint8_t{ Next, Best };
   public:
