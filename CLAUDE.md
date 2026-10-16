@@ -214,16 +214,17 @@ When working in this repository:
   narrowing the blend gate (300→200, the untested opposite of Round 30) on top of Round 33's
   fix and also got a small, consistent regression (-15/-22) — both gate directions now
   regress, closing out blend-gate tuning as a lever. Round 35 then tried the first of the two
-  remaining classical-eval ideas — promotion-race urgency — and got **both seeds positive**
-  for the first time since Round 27 (+7/+25), though neither clears the noise band, so it's
-  promising but not confirmed.
+  remaining classical-eval ideas — promotion-race urgency — and got all **three seeds
+  positive** (+7/+25/+29, avg +20) — the strongest multi-seed signal of any lever since
+  Round 27, though no single seed clears the noise band, so it's kept but not yet "confirmed"
+  by the project's strict single-round bar.
 * **Next priority**: every lever tried since Round 27 except Round 35 has failed to land
-  positive at both seeds. One classical-eval idea remains genuinely untried — **rook-trap
-  risk** — mechanically unrelated to the others and not pre-judged by any prior result. Worth
-  trying next and stacking with Round 35 to see if small positives compound toward something
-  that clears the noise band; a third seed on Round 35 alone (to try to confirm it in
-  isolation first) is the other reasonable next step. Round 29's untuned correction-history
-  constants also remain un-swept if revisited.
+  positive across repeated testing. One classical-eval idea remains genuinely untried —
+  **rook-trap risk** — mechanically unrelated to the others and not pre-judged by any prior
+  result. Worth trying next and stacking with Round 35 to see if the two small positives
+  compound toward something that clears the noise band outright — the most promising path to
+  the -150 target currently open. Round 29's untuned correction-history constants also remain
+  un-swept if revisited.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -780,20 +781,32 @@ values exactly (15/35 vs 0/0).
 Both seeds landed positive — the first same-sign-positive result at both seeds since Round 27
 itself (Round 28 was sign-flipped; every other round since has been flat or negative at both).
 But neither delta individually clears the ~46 Elo single-seed noise band, so by this
-project's own standing bar (both seeds agree *and* at least one clears the band) this is
-**not yet a confirmed win** — it's the most encouraging signal since Round 27, not a proven
-one. Not deployed to main's net-selection state (no net involved anyway); kept on branch
-`classical-eval-new-heuristics`, committed locally, not merged, pending either a third seed
-to break the tie or a decision to keep it on the same zero-risk/well-motivated grounds as
-Round 33's fix.
+project's own standing bar (both seeds agree *and* at least one clears the band) this was
+not yet a confirmed win on 2 seeds alone — prompting a third-seed test (user's call) rather
+than stacking with rook-trap risk immediately.
+
+**Third seed (777), with its own same-seed Round 27 baseline** (main's clean pre-Round-33
+state, built and gauntleted fresh at seed=777 for a fair comparison, since baseline Elo
+itself varies by seed — Round 27 itself scored -205 at seed 99 but -200 at seed 4242):
+
+| Seed | Round 35 | Round 27 (same-seed baseline) | Delta |
+|---|---|---|---|
+| 777 | 0W 90D 110L → -215 | 0W 79D 121L → **-244** | **+29** |
+
+**All three seeds now positive** (+7, +25, +29; average +20) — a materially stronger signal
+than 2/2, even though no single seed clears the noise band: if this were pure noise around a
+true zero effect, 3-for-3 same-direction has roughly 1-in-8 odds by chance alone. **Decision:
+kept** on branch `classical-eval-new-heuristics`, committed locally, not merged to main. Not
+yet "confirmed" by this project's strict single-round bar, but the strongest multi-seed signal
+of any lever tried since Round 27 itself.
 
 **Takeaway**: unlike every classical-eval/search-constant attempt since Round 27 (correction
 history, blend gate × 2, counting-danger), this is the first one that didn't land flat or
-negative at both seeds. Still far short of the +50/+55 Elo needed to reach the -150 target on
-its own, but it reopens the question of whether classical-eval heuristics genuinely help now
-that Round 33's fix makes the bare-king endgame branch live — worth stacking with rook-trap
-risk (the remaining untried idea) to see if small positives compound, rather than treating
-this round in isolation.
+negative across repeated testing. Still far short of the +50/+55 Elo needed to reach the -150
+target on its own (even the 3-seed average of +20 falls short), but it's real evidence that
+classical-eval heuristics can help now that Round 33's fix makes the bare-king endgame branch
+live — worth stacking with rook-trap risk (the remaining untried idea) next to see if the two
+small positives compound toward something that clears the noise band outright.
 
 ---
 
@@ -816,7 +829,7 @@ this round in isolation.
 | Round 32 (classical eval: counting-danger awareness) | -228/-228 | -23/-28 | both seeds landed identical (0W 85D 115L) — later found to be dead code during real search (see Round 33), so this was almost certainly noise, not a real effect |
 | Round 33 (fix: `evaluate.cpp` no longer blinds whole counting-eligible endgames) | -205/-230 | 0/-30 | one seed flat, one down 30 — inconclusive by this project's bar; kept anyway on correctness grounds (resolved 2026-10-11) |
 | Round 34 (blend gate narrowed 300→200cp, on top of Round 33's fix) | -220/-222 | -15/-22 | both seeds agree (negative), tight 2-Elo agreement — small consistent regression, not deployed; closes out blend-gate tuning as a lever (both directions now regress) |
-| Round 35 (classical eval: promotion-race urgency) | -198/-175 | +7/+25 | both seeds positive — first same-sign-positive result since Round 27 — but neither clears the noise band; promising, not confirmed |
+| Round 35 (classical eval: promotion-race urgency) | -198/-175/-215 | +7/+25/+29 | all 3 seeds positive (avg +20) — strongest multi-seed signal since Round 27, but no single seed clears the noise band; kept, not yet "confirmed" by the strict bar |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
