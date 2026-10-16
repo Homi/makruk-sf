@@ -78,7 +78,7 @@ namespace Nebula{
     if (isMakrukCountingDraw(pos.state()->makrukCounting))
       return VALUE_DRAW;
     const Value classical = makrukClassicalEval(pos);
-    if (Eval::mknnEval.isLoaded() && std::abs(int(classical)) < 200) {
+    if (Eval::mknnEval.isLoaded() && std::abs(int(classical)) < 300) {
       const Value nnue_pos  = Eval::mknnEval.evaluate(pos);
       const int   nnue_delta = std::clamp(int(nnue_pos) - int(classical), -100, 100);
       const int   blend      = int(classical) + nnue_delta;

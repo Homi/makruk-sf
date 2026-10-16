@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 33, 2026-10-11)
+## Current Status (as of Round 34, 2026-10-16)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-33 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-34 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -209,20 +209,18 @@ When working in this repository:
   measured a small regression (-23/-28) — but Round 33 then discovered this was almost
   certainly noise: `evaluate.cpp` had an unrelated pre-existing bug (predates Round 18) that
   made `makrukClassicalEval()`'s entire bare-king endgame branch dead code during real search,
-  so Round 32's mechanism never actually ran. Round 33 fixed that bug but the gauntlet came
-  back inconclusive (0/-30 across seeds) — not a confirmed win despite being a genuine
-  correctness fix; left as an open decision (see Development History) rather than deployed.
+  so Round 32's mechanism never actually ran. Round 33 fixed that bug — gauntlet inconclusive
+  (0/-30) but **kept anyway on correctness grounds** (resolved 2026-10-11). Round 34 then tried
+  narrowing the blend gate (300→200, the untested opposite of Round 30) on top of Round 33's
+  fix and also got a small, consistent regression (-15/-22) — both gate directions now
+  regress, closing out blend-gate tuning as a lever.
 * **Next priority**: every lever tried since Round 27 has failed to confirm a win (data,
-  search correction-history, blend gate, NNUE L1, counting-danger eval, and now the
-  evaluate.cpp counting-draw fix itself). Two directions remain genuinely untried: (1) a
-  *narrower* blend gate (300→200ish, trusting classical more — the untested opposite of
-  Round 30, cheap, no retraining needed — and now arguably more promising to try *on top of*
-  Round 33's fix, since classical eval's endgame signal is finally live during search), and
-  (2) the other two classical-eval ideas from the "not yet implemented" list — promotion-race
-  urgency and rook-trap risk — which are mechanically unrelated to counting-danger and so
-  aren't pre-judged by Round 32's result, and which now have a real chance to matter given
-  Round 33's fix. Round 29's untuned correction-history constants also remain un-swept if
-  revisited.
+  search correction-history, blend gate in both directions, NNUE L1, counting-danger eval).
+  The two remaining genuinely untried directions are both classical-eval ideas from the "not
+  yet implemented" list — **promotion-race urgency** and **rook-trap risk** — mechanically
+  unrelated to counting-danger (Round 32) and blend-gate (Rounds 30/34), so not pre-judged by
+  either, and now with a real chance to matter during search given Round 33's fix. Round 29's
+  untuned correction-history constants also remain un-swept if revisited.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -701,8 +699,48 @@ correctness risk (full test suite + perft unaffected) and the gauntlet's silence
 reflect the specific methodology (200ms, adjudicated at 500cp) rather than the fix being
 neutral in general — bare-king conversion quality plausibly matters more in longer games,
 against weaker/non-adjudicated opponents, or for training-data generation (classical eval
-feeds teacher-label quality) than it does in this particular fast equal-condition format. Left
-as an open decision rather than resolved unilaterally.
+feeds teacher-label quality) than it does in this particular fast equal-condition format.
+
+**Resolved (2026-10-11)**: user decided to keep the fix on correctness grounds — it matches
+the original code's own documented intent, carries zero correctness risk, and an unconfirmed
+gauntlet result doesn't make a real logic error "correct to leave in."
+
+### Round 34 — Blend Gate Narrowed 300→200cp (on top of Round 33's fix): Small Regression, Not Deployed (2026-10-11/16)
+
+The untested-opposite direction of Round 30's gate-widening regression, tried now on top of
+Round 33's fix (classical eval's bare-king endgame branch is finally live during search, so
+this seemed like a more meaningful time to retry gate tuning than before). Single-line change
+(`evaluate.cpp`, gate constant only), verified via the full test suite + `build_verify.sh` +
+`perft 5`.
+
+Session was interrupted mid-run for a machine shutdown after seed=99 completed but seed=4242
+had only reached 23/200 games; `gauntlet.py` has no `--resume` (unlike `train.py`), so the
+partial seed=4242 run was discarded and rerun from scratch next session after re-verifying the
+build matched the committed WIP state.
+
+**Gauntlet, confirmed at 2 seeds — small, consistent regression:**
+
+| Seed | Round 34 (gate=200) | Round 27 (ref) | Delta |
+|---|---|---|---|
+| 99 | 0W 88D 112L → -220 | -205 | -15 |
+| 4242 | 0W 87D 113L → -222 | -200 | -22 |
+
+Both seeds agree in direction (negative) and land within 2 Elo of each other — tighter
+agreement than Round 27's own confirming spread, reading as a real small regression rather
+than noise (same evidentiary pattern as Round 29's correction-history finding; by
+coincidence, the exact same absolute Elo values and deltas as Round 29, -220/-222 and
+-15/-22). **Not deployed** — gate reverted to 300 (matching Round 27's tracked state exactly),
+rebuilt and re-verified. Kept on branch `classical-eval-new-heuristics`, not merged.
+
+**Takeaway**: combined with Round 30 (wider gate, 450cp, also a regression — more clearly
+confirmed there, -20/-49), both directions of gate-tuning now regress, even with Round 33's
+fix applied underneath. 300cp looks like a genuine local optimum for this gate, not an
+artifact of the net's known material-underestimation weakness being newly exposed by a wider
+gate (Round 30's original theory) — narrowing it (trusting classical *more*) should have been
+safe under that theory and wasn't. This closes out blend-gate tuning as a lever for now; the
+two classical-eval ideas that remain genuinely untried are promotion-race urgency and
+rook-trap risk, both still live candidates and, like Round 32's mechanism, now have a real
+chance to matter during search given Round 33's fix.
 
 ---
 
@@ -723,7 +761,8 @@ as an open decision rather than resolved unilaterally.
 | Round 30 (blend gate widened 300→450cp) | -225/-249 | -20/-49 | both seeds agree (negative), -49 clears the noise band — confirmed regression, not deployed |
 | Round 31 (NNUE L1 doubled 512→1024, same dataset) | -249/-269 | -44/-69 | both seeds agree (negative), -69 clears the noise band — confirmed regression, not deployed; completes all 4 of Round 28's levers, none beat Round 27 |
 | Round 32 (classical eval: counting-danger awareness) | -228/-228 | -23/-28 | both seeds landed identical (0W 85D 115L) — later found to be dead code during real search (see Round 33), so this was almost certainly noise, not a real effect |
-| Round 33 (fix: `evaluate.cpp` no longer blinds whole counting-eligible endgames) | -205/-230 | 0/-30 | one seed flat, one down 30 — inconclusive by this project's bar; correctness fix, not deployed as an Elo win |
+| Round 33 (fix: `evaluate.cpp` no longer blinds whole counting-eligible endgames) | -205/-230 | 0/-30 | one seed flat, one down 30 — inconclusive by this project's bar; kept anyway on correctness grounds (resolved 2026-10-11) |
+| Round 34 (blend gate narrowed 300→200cp, on top of Round 33's fix) | -220/-222 | -15/-22 | both seeds agree (negative), tight 2-Elo agreement — small consistent regression, not deployed; closes out blend-gate tuning as a lever (both directions now regress) |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
