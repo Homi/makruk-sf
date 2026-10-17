@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 39, 2026-10-17)
+## Current Status (as of Round 41, 2026-10-17)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -233,24 +233,31 @@ When working in this repository:
   files back to pre-Round-38 state). Round 39 then tried a different kind of change on Round
   35 itself — not adding a new term, but doubling the magnitude of the one term already
   working — and got a clean sign-flip (+19 at seed 99, -58 at seed 4242) — inconclusive, not
-  adopted, reverted to the original 1× magnitude.
+  adopted, reverted to the original 1× magnitude. Rounds 40-41 then re-tested the blend gate
+  (narrow 200, wide 450) with Round 35 active, since promotion-urgency scoring could plausibly
+  shift which positions fall inside the gate range — a genuine untested interaction. Both
+  directions regressed again (-27/-45 and -43/-37 vs Round 35 alone), matching Rounds 30/34's
+  original sign exactly — the interaction doesn't change the conclusion. Both reverted to
+  gate=300.
 * **Next priority**: every lever tried since Round 27 except Round 35 has failed to land
   positive across repeated testing. **Three independent stacking attempts in a row** (Rounds
   36, 37, 38 — mechanically unrelated to each other, Round 38 the most carefully implemented)
   all eroded Round 35's signal rather than compounding it, each one larger than the last —
   strong evidence the gain is fragile to further additions on this engine/dataset. Tuning
   Round 35's own magnitude (Round 39) gave a genuinely inconclusive sign-flip rather than a
-  clean answer either way, leaving its calibration an open (if low-signal) question. With
-  blend-gate tuning, all three original classical-eval ideas, full correction history, and a
-  first magnitude-tuning attempt all now tried, the remaining open items are: (1) further
-  magnitude tuning of Round 35 (e.g. a smaller/intermediate value, or a 2nd-seed-breaking
-  3-seed test on the doubled version) — low expected signal-to-noise per this project's
-  history of constant-tuning sweeps (Rounds 24-25: 3 candidates, all within 11 Elo); (2)
-  Round 29's untuned pawn-only correction-history constants, un-swept if revisited; (3) a
-  deeper, riskier rook-trap-risk version that checks actual capturability instead of raw
-  mobility; (4) accepting Round 35 alone as the standing candidate and looking for a lever
-  outside this session's explored space entirely (NNUE L1=1024 paired with larger L2/L3, a
-  training-recipe sweep, etc.). None of these is a quick next step the way Rounds 32-38 were.
+  clean answer either way, leaving its calibration an open (if low-signal) question.
+  Re-checking the blend gate with Round 35 active (Rounds 40-41) confirmed gate=300 is robust
+  regardless. With blend-gate tuning (now checked both with and without Round 35), all three
+  original classical-eval ideas, full correction history, and a first magnitude-tuning attempt
+  all now tried, the remaining open items are: (1) further magnitude tuning of Round 35 (e.g.
+  a smaller/intermediate value, or a 2nd-seed-breaking 3-seed test on the doubled version) —
+  low expected signal-to-noise per this project's history of constant-tuning sweeps (Rounds
+  24-25: 3 candidates, all within 11 Elo); (2) Round 29's untuned pawn-only correction-history
+  constants, un-swept if revisited; (3) a deeper, riskier rook-trap-risk version that checks
+  actual capturability instead of raw mobility; (4) accepting Round 35 alone as the standing
+  candidate and looking for a lever outside this session's explored space entirely (NNUE
+  L1=1024 paired with larger L2/L3, a training-recipe sweep, etc.). None of these is a quick
+  next step the way Rounds 32-38 were.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -1014,6 +1021,44 @@ project's history (Rounds 24-25's search-constant sweep: 3 candidates, all withi
 baseline). Round 35 at its original, 3-seed-confirmed-positive magnitude remains the standing
 candidate.
 
+### Rounds 40-41 — Blend Gate Re-Tested With Round 35 Active — Both Directions Still Regress (2026-10-17)
+
+Rounds 30 (wide, 450cp) and 34 (narrow, 200cp) were both tested *before* Round 35 existed.
+Since promotion-race urgency adds directly to the classical score for passed pawns, it could
+plausibly shift how often positions fall inside/outside the gate range, so the user asked to
+re-test both directions with Round 35 active — a genuine interaction never checked. Two
+single-constant changes, each verified via the full gate (`build_verify.sh` + `perft 5` exact)
+before gauntlet testing.
+
+**Round 40 (narrow, 300→200, + Round 35) — confirmed regression:**
+
+| Seed | Round 40 | Round 35 alone (ref) | Round 27 (ref) |
+|---|---|---|---|
+| 99 | -225 | -198 (Δ **-27**) | -205 (Δ -20) |
+| 4242 | -220 | -175 (Δ **-45**) | -200 (Δ -20) |
+
+**Round 41 (wide, 300→450, + Round 35) — confirmed regression:**
+
+| Seed | Round 41 | Round 35 alone (ref) | Round 27 (ref) |
+|---|---|---|---|
+| 99 | -241 | -198 (Δ **-43**) | -205 (Δ -36) |
+| 4242 | -212 | -175 (Δ **-37**) | -200 (Δ -12) |
+
+Both directions regress with Round 35 active, both seeds negative in each case — matching
+Rounds 30/34's original findings exactly in sign (though not in whether Round 35 changes the
+*magnitude*: both Round 40/41 deltas-vs-Round-35 are somewhat larger than Round 30/34's
+deltas-vs-Round-27 were, but not dramatically so, and with only 2 seeds per condition this
+isn't a confident "the interaction makes it worse," just "the interaction doesn't make it
+better or flip the sign"). **Both reverted** to gate=300 (confirmed via `build_verify.sh` +
+`perft 5` exact after the final revert).
+
+**Takeaway**: the hypothesis that Round 35's active promotion-urgency scoring might shift
+enough positions across the gate threshold to change Rounds 30/34's conclusions did not pan
+out — 300cp remains a genuine local optimum for the blend gate independent of whether Round
+35 is active. This closes out the blend-gate-interaction question cleanly: it was worth
+checking once (a real untested interaction, unlike re-running an already-settled question),
+and the answer is no, it doesn't change anything.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -1040,6 +1085,8 @@ candidate.
 | Round 37 (piece mobility bonus stacked on Round 35) | -228/-212 | -23/-12 | both seeds consistently worse than Round 35 alone (-30/-37) — second stacking attempt in a row that regressed, reverted |
 | Round 38 (full 4-table correction history, stacked on Round 35) | -258/-222 | -53/-22 | both seeds consistently worse than Round 35 alone (-60/-47) — worst of 3 stacking attempts, reverted |
 | Round 39 (promotion-race urgency, magnitude doubled) | -179/-233 | +26/-33 | sign-flipped vs Round 35 itself (+19/-58) — inconclusive, not adopted; reverted to 1× magnitude |
+| Round 40 (blend gate narrowed 300→200, + Round 35) | -225/-220 | -20/-20 | both seeds worse than Round 35 alone (-27/-45) — confirmed regression, interaction doesn't help; reverted |
+| Round 41 (blend gate widened 300→450, + Round 35) | -241/-212 | -36/-12 | both seeds worse than Round 35 alone (-43/-37) — confirmed regression, interaction doesn't help; reverted |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
