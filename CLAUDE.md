@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 38, 2026-10-17)
+## Current Status (as of Round 39, 2026-10-17)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -230,23 +230,27 @@ When working in this repository:
   infrastructure, deliberately full-recompute rather than incremental XOR, validated via 1230+
   random-walk cross-checks before ever touching search) — also stacked on Round 35, and
   regressed the *most* of all three attempts (-60/-47, both seeds). Reverted completely (10
-  files back to pre-Round-38 state).
+  files back to pre-Round-38 state). Round 39 then tried a different kind of change on Round
+  35 itself — not adding a new term, but doubling the magnitude of the one term already
+  working — and got a clean sign-flip (+19 at seed 99, -58 at seed 4242) — inconclusive, not
+  adopted, reverted to the original 1× magnitude.
 * **Next priority**: every lever tried since Round 27 except Round 35 has failed to land
-  positive across repeated testing, and **three independent stacking attempts in a row**
-  (Rounds 36, 37, 38 — mechanically unrelated to each other, and Round 38 the most carefully
-  implemented of the three) all eroded Round 35's signal rather than compounding it, each one
-  larger than the last. This is strong evidence that Round 35's gain is fragile to further
-  additions on this engine/dataset, not a coincidence specific to any one mechanism. With
-  blend-gate tuning, all three original classical-eval ideas, and now full correction history
-  all closed out, the remaining open items are: (1) Round 29's untuned pawn-only correction-
-  history constants, un-swept if revisited (a tuning sweep is a different kind of change than
-  the "add more tables at the same defaults" tried in Round 38); (2) a deeper, riskier
-  rook-trap-risk version that checks actual capturability instead of raw mobility; (3)
-  retuning *existing* eval terms' weights jointly with Round 35 rather than adding a new
-  isolated term, since isolated additions are now 0-for-3; (4) accepting Round 35 alone as the
-  standing candidate and looking for a lever outside this session's explored space entirely
-  (NNUE L1=1024 paired with larger L2/L3, a training-recipe sweep, etc.). None of these is a
-  quick next step the way Rounds 32-38 were.
+  positive across repeated testing. **Three independent stacking attempts in a row** (Rounds
+  36, 37, 38 — mechanically unrelated to each other, Round 38 the most carefully implemented)
+  all eroded Round 35's signal rather than compounding it, each one larger than the last —
+  strong evidence the gain is fragile to further additions on this engine/dataset. Tuning
+  Round 35's own magnitude (Round 39) gave a genuinely inconclusive sign-flip rather than a
+  clean answer either way, leaving its calibration an open (if low-signal) question. With
+  blend-gate tuning, all three original classical-eval ideas, full correction history, and a
+  first magnitude-tuning attempt all now tried, the remaining open items are: (1) further
+  magnitude tuning of Round 35 (e.g. a smaller/intermediate value, or a 2nd-seed-breaking
+  3-seed test on the doubled version) — low expected signal-to-noise per this project's
+  history of constant-tuning sweeps (Rounds 24-25: 3 candidates, all within 11 Elo); (2)
+  Round 29's untuned pawn-only correction-history constants, un-swept if revisited; (3) a
+  deeper, riskier rook-trap-risk version that checks actual capturability instead of raw
+  mobility; (4) accepting Round 35 alone as the standing candidate and looking for a lever
+  outside this session's explored space entirely (NNUE L1=1024 paired with larger L2/L3, a
+  training-recipe sweep, etc.). None of these is a quick next step the way Rounds 32-38 were.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -975,6 +979,41 @@ constants remain a candidate for a future tuning sweep if this direction is revi
 that's a different kind of change (retuning existing constants) than what was tried here
 (adding 3 more tables at the same untuned defaults).
 
+### Round 39 — Promotion-Race Urgency, Doubled Magnitude — Sign-Flipped, Inconclusive (2026-10-17)
+
+After three stacking attempts in a row failed (Rounds 36-38), tried a different kind of
+change on Round 35 itself: not adding a new term, but tuning the one term already showing a
+real signal. Round 35's `PromotionUrgency` constants (`S(0,5)` two steps from promotion,
+`S(15,35)` one step away) are modest relative to the actual material stakes — a Met is worth
+roughly 250-300cp more than a pawn — so there was room to test a larger magnitude without
+being unreasonable. Doubled both: `S(0,10)` / `S(30,70)`. Single-constant change, verified via
+the full test suite (the existing Round 35 tests use relative comparisons, not exact values,
+so they remained valid unchanged) + `build_verify.sh` + `perft 5` exact.
+
+**Gauntlet, 2 seeds vs Fairy-Stockfish-NNUE — sign-flipped relative to Round 35 itself:**
+
+| Seed | Round 39 (2×) | Round 35 (1×, ref) | Round 27 (ref) |
+|---|---|---|---|
+| 99 | -179 | -198 (Δ **+19**) | -205 (Δ +26) |
+| 4242 | -233 | -175 (Δ **-58**) | -200 (Δ -33) |
+
+Doubling helped strongly at seed 99 and hurt strongly at seed 4242 — a clean sign-flip by this
+project's own standing rule (Round 28 precedent: a sign-flip means inconclusive, not "small
+effect either way"). **Not adopted** — reverted to the original 1× magnitude (confirmed via
+`build_verify.sh` + `perft 5` exact), since this result doesn't demonstrate the original
+magnitude is wrong, only that doubling it isn't a clean improvement.
+
+**Takeaway**: unlike Rounds 36-38 (adding a brand-new term, each confirmed negative),
+*tuning* Round 35's existing term produced genuine uncertainty rather than a clean regression
+— a qualitatively different (and less conclusive) result. This leaves the question of whether
+Round 35's magnitude is well-calibrated genuinely open rather than closed: a smaller
+magnitude (halving, or intermediate values) remains untested and could behave differently
+again, but each such test costs a full 2-seed gauntlet for an uncertain payoff, and the
+signal-to-noise ratio of single-constant tuning sweeps has been poor throughout this
+project's history (Rounds 24-25's search-constant sweep: 3 candidates, all within 11 Elo of
+baseline). Round 35 at its original, 3-seed-confirmed-positive magnitude remains the standing
+candidate.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -1000,6 +1039,7 @@ that's a different kind of change (retuning existing constants) than what was tr
 | Round 36 (rook-trap risk stacked on Round 35) | -205/-225 | 0/-25 | stacking made both seeds worse than Round 35 alone (+7→0, +25→-25) — net negative, reverted; closes out the classical-eval "not yet implemented" list |
 | Round 37 (piece mobility bonus stacked on Round 35) | -228/-212 | -23/-12 | both seeds consistently worse than Round 35 alone (-30/-37) — second stacking attempt in a row that regressed, reverted |
 | Round 38 (full 4-table correction history, stacked on Round 35) | -258/-222 | -53/-22 | both seeds consistently worse than Round 35 alone (-60/-47) — worst of 3 stacking attempts, reverted |
+| Round 39 (promotion-race urgency, magnitude doubled) | -179/-233 | +26/-33 | sign-flipped vs Round 35 itself (+19/-58) — inconclusive, not adopted; reverted to 1× magnitude |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
