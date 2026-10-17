@@ -6,7 +6,6 @@
 
 namespace Nebula{
   class Position;
-  class Thread;
 
   namespace Search{
     constexpr int counterMovePruneThreshold=0;
@@ -66,10 +65,5 @@ namespace Nebula{
     extern LimitsType limits;
     void init();
     void clear();
-
-    // Round 29: pawn correction history -- corrects ev by a bias keyed on pawnKey().
-    // External linkage (not in search.cpp's anonymous namespace) so it's directly
-    // unit-testable from test_corrhist.cpp.
-    Value correctedStaticEval(Value ev, Color us, const Position& pos, const Thread* th);
   }
 }

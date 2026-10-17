@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 37, 2026-10-16)
+## Current Status (as of Round 38, 2026-10-17)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-37 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-38 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -225,20 +225,28 @@ When working in this repository:
   showed a positive signal, and it stands alone. Round 37 then tried a broader, more standard
   technique not on that original list — a general piece-mobility *bonus* (Knight/Khon/Rook/
   Met) stacked on Round 35 — and also regressed relative to Round 35 alone (-30/-37, both
-  seeds consistently negative). Reverted.
+  seeds consistently negative). Reverted. Round 38 then completed the full 4-table correction
+  history Round 29 had deferred (new materialKey()/minorPieceKey()/nonPawnKey() Zobrist
+  infrastructure, deliberately full-recompute rather than incremental XOR, validated via 1230+
+  random-walk cross-checks before ever touching search) — also stacked on Round 35, and
+  regressed the *most* of all three attempts (-60/-47, both seeds). Reverted completely (10
+  files back to pre-Round-38 state).
 * **Next priority**: every lever tried since Round 27 except Round 35 has failed to land
-  positive across repeated testing, and **two independent stacking attempts in a row**
-  (Rounds 36, 37 — mechanically unrelated to each other) both eroded Round 35's signal rather
-  than compounding it. This is suggestive that Round 35's gain is fragile to further additions
-  rather than a coincidence specific to either mechanism tried. With blend-gate tuning and
-  every classical-eval idea tried so far now closed out, the remaining open items are: (1)
-  Round 29's untuned correction-history constants, un-swept if revisited; (2) a deeper, riskier
+  positive across repeated testing, and **three independent stacking attempts in a row**
+  (Rounds 36, 37, 38 — mechanically unrelated to each other, and Round 38 the most carefully
+  implemented of the three) all eroded Round 35's signal rather than compounding it, each one
+  larger than the last. This is strong evidence that Round 35's gain is fragile to further
+  additions on this engine/dataset, not a coincidence specific to any one mechanism. With
+  blend-gate tuning, all three original classical-eval ideas, and now full correction history
+  all closed out, the remaining open items are: (1) Round 29's untuned pawn-only correction-
+  history constants, un-swept if revisited (a tuning sweep is a different kind of change than
+  the "add more tables at the same defaults" tried in Round 38); (2) a deeper, riskier
   rook-trap-risk version that checks actual capturability instead of raw mobility; (3)
   retuning *existing* eval terms' weights jointly with Round 35 rather than adding a new
-  isolated term, since isolated additions have a 0-for-2 record now; (4) accepting Round 35
-  alone as the standing candidate and looking for a lever outside this session's explored
-  space entirely (NNUE L1=1024 paired with larger L2/L3, a training-recipe sweep, etc.). None
-  of these is a quick next step the way Rounds 32-37 were.
+  isolated term, since isolated additions are now 0-for-3; (4) accepting Round 35 alone as the
+  standing candidate and looking for a lever outside this session's explored space entirely
+  (NNUE L1=1024 paired with larger L2/L3, a training-recipe sweep, etc.). None of these is a
+  quick next step the way Rounds 32-38 were.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -903,6 +911,70 @@ ground. Round 35 alone remains the standing candidate; further classical-eval ad
 top of it are not obviously promising without a different approach (e.g. retuning existing
 terms' weights jointly with a new one, rather than adding a new term in isolation).
 
+### Round 38 — Full 4-Table Correction History (Material/Minor-Piece/Non-Pawn) — Confirmed Regression, Reverted (2026-10-17)
+
+User asked to complete the full correction-history suite Round 29 had deliberately deferred
+("this codebase has no materialKey()/minorPieceKey()/nonPawnKey() at all... the same class of
+subtle-bug risk that caused the historical seeGe() bugs"). Cherry-picked Round 29's pawn-only
+commit (40df71c, clean, no conflicts) as the foundation, then built the missing Zobrist-key
+infrastructure.
+
+**Safety choice, deliberately deviating from true Stockfish style**: `materialKey`,
+`minorPieceKey`, and `nonPawnKey[color]` are maintained by a **full recompute from board
+state** (`Position::recomputeAuxKeys()`, called once at the end of `doMove()` and inside
+`setState()`) rather than true incremental XOR maintenance like `pawnKey()`. This trades a few
+dozen extra ops per move (not in any hot inner loop) for eliminating the entire incremental-
+divergence bug class entirely — there is only one code path, never two that could drift apart.
+`doNullMove()` needed no change (these fields live before `key` in `StateInfo`, within its
+partial-memcpy range, and piece positions never change on a null move anyway).
+
+New tests isolated the key-computation logic before touching search: targeted FEN checks that
+each key changes only when it should (quiet pawn/knight move, a knight capture, a promotion)
+and a 300-ply random-walk check (1230 checks) confirming all three keys match an independent
+fresh `Position::set()` recompute at *every single ply* — two real test-FEN bugs (an illegal
+diagonal "rook" capture, a knight destination blocked by Makruk's full pawn rank 3) were caught
+immediately by the test failing to construct a legal move, before ever reaching the gauntlet.
+
+Then wired three new tables (`MaterialCorrectionHistory`, `MinorPieceCorrectionHistory`,
+`NonPawnCorrectionHistory`) matching the existing `PawnCorrectionHistory`'s shape and untuned
+constants exactly (no stronger rationale to differentiate them). `Search::correctedStaticEval()`
+sums all 4 tables' individually-clamped (±64 each) contributions, then clamps the *total* to a
+new combined cap (±100, matching this codebase's existing NNUE-blend cap magnitude) before
+applying it. New tests confirmed the 4 tables combine additively and that saturating all 4 at
+once still stays safely inside the TB-range via the combined cap. Full verification gate passed
+clean throughout (1237 total correction-history/aux-key checks at the final stage), `perft 5`
+exact.
+
+**Gauntlet, 2 seeds vs Fairy-Stockfish-NNUE — confirmed regression, the largest of this
+session's three stacking attempts:**
+
+| Seed | Round 38 (full correction history) | Round 35 alone (ref) | Round 27 (ref) |
+|---|---|---|---|
+| 99 | 0W 74D 126L → -258 | -198 (Δ **-60**) | -205 (Δ -53) |
+| 4242 | 0W 87D 113L → -222 | -175 (Δ **-47**) | -200 (Δ -22) |
+
+Both seeds consistently negative relative to Round 35 alone, both clearly larger in magnitude
+than Round 36's rook-trap risk (-30/-37) or Round 37's piece mobility (-30/-37) — this is the
+**worst** of the three stacking attempts, not merely another one. **Reverted completely**: all
+10 files touched (the cherry-pick, the new keys, and the 3 new tables) checked out back to the
+pre-Round-38 commit; `build_tests.cpp` no longer even contains a correction-history test.
+Rebuilt and re-verified (`build_verify.sh` + `perft 5` exact) — confirmed restores exactly
+Round 35's state. The code remains in git history (3 commits) for potential future reference,
+but is not part of the kept/active state.
+
+**Takeaway**: the infrastructure itself (the new Zobrist keys) checked out as correct via 1230+
+independent random-walk cross-checks — this is not a correctness bug, it's a genuine Elo
+regression from the *mechanism*. Combined with Rounds 36-37, this is the **third** stacking
+attempt in a row to actively hurt Round 35's standing state, and by a clearly larger margin
+than the other two. This further reinforces the Round 37 takeaway: adding further eval/search
+terms on top of Round 35 in isolation is not a promising direction right now, regardless of how
+well-motivated or carefully-implemented the addition is (unlike Rounds 36/37, this one came
+with the most implementation care of the three — full test coverage of the key-computation
+layer *before* touching search — and still regressed more, not less). Round 29's own untuned
+constants remain a candidate for a future tuning sweep if this direction is revisited, but
+that's a different kind of change (retuning existing constants) than what was tried here
+(adding 3 more tables at the same untuned defaults).
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -927,6 +999,7 @@ terms' weights jointly with a new one, rather than adding a new term in isolatio
 | Round 35 (classical eval: promotion-race urgency) | -198/-175/-215 | +7/+25/+29 | all 3 seeds positive (avg +20) — strongest multi-seed signal since Round 27, but no single seed clears the noise band; kept, not yet "confirmed" by the strict bar |
 | Round 36 (rook-trap risk stacked on Round 35) | -205/-225 | 0/-25 | stacking made both seeds worse than Round 35 alone (+7→0, +25→-25) — net negative, reverted; closes out the classical-eval "not yet implemented" list |
 | Round 37 (piece mobility bonus stacked on Round 35) | -228/-212 | -23/-12 | both seeds consistently worse than Round 35 alone (-30/-37) — second stacking attempt in a row that regressed, reverted |
+| Round 38 (full 4-table correction history, stacked on Round 35) | -258/-222 | -53/-22 | both seeds consistently worse than Round 35 alone (-60/-47) — worst of 3 stacking attempts, reverted |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."

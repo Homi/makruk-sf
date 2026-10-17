@@ -11,19 +11,6 @@
 namespace Nebula{
   struct StateInfo{
     uint64_t pawnKey;
-    // Round 29 extension: material/minor-piece/non-pawn correction-history keys.
-    // Deliberately maintained by a full recompute from board state every doMove()/
-    // set() call (Position::recomputeAuxKeys()) rather than true incremental XOR
-    // maintenance like pawnKey -- this trades a few dozen extra ops per move (not
-    // in any hot inner loop) for eliminating the entire incremental-divergence bug
-    // class that caused the historical seeGe() bugs (Rounds 19-20). Placed here
-    // (before 'key') so both doMove's and doNullMove's partial memcpy carry them
-    // forward as a correct baseline on moves/null-moves that don't need to change
-    // them (recomputeAuxKeys() always overwrites unconditionally when called, so
-    // placement only matters for doNullMove(), which never calls it at all).
-    uint64_t materialKey;
-    uint64_t minorPieceKey;
-    uint64_t nonPawnKey[COLOR_NB];
     Value nonPawnMaterial[COLOR_NB];
     int castlingRights;
     int rule50;
@@ -110,9 +97,6 @@ namespace Nebula{
     [[nodiscard]] uint64_t key() const;
     [[nodiscard]] uint64_t keyAfter(Move m) const;
     [[nodiscard]] uint64_t pawnKey() const;
-    [[nodiscard]] uint64_t materialKey() const;
-    [[nodiscard]] uint64_t minorPieceKey() const;
-    [[nodiscard]] uint64_t nonPawnKey(Color c) const;
     [[nodiscard]] Color stm() const;
     [[nodiscard]] int gameply() const;
     [[nodiscard]] bool isChess960() const;
@@ -129,7 +113,6 @@ namespace Nebula{
   private:
     void setCastlingRight(Color c, Square rfrom);
     void setState(StateInfo* si) const;
-    void recomputeAuxKeys(StateInfo* si) const;
     void setCheckInfo(StateInfo* si) const;
     void movePiece(Square from, Square to);
     template <bool Do>
@@ -223,9 +206,6 @@ namespace Nebula{
   }
 
   inline uint64_t Position::pawnKey() const{ return st->pawnKey; }
-  inline uint64_t Position::materialKey() const{ return st->materialKey; }
-  inline uint64_t Position::minorPieceKey() const{ return st->minorPieceKey; }
-  inline uint64_t Position::nonPawnKey(const Color c) const{ return st->nonPawnKey[c]; }
   inline Value Position::nonPawnMaterial(const Color c) const{ return st->nonPawnMaterial[c]; }
   inline Value Position::nonPawnMaterial() const{ return nonPawnMaterial(WHITE)+nonPawnMaterial(BLACK); }
   inline int Position::gameply() const{ return gamePly; }

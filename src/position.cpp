@@ -20,11 +20,6 @@ namespace Nebula{
       uint64_t enpassant[FILE_NB];
       uint64_t castling[CASTLING_RIGHT_NB];
       uint64_t side, noPawns;
-      // Correction-history extension: one random key per (piece, count), XORed in/out
-      // as a piece's count changes -- count index up to 31 is a generous safety
-      // margin (max any piece type could realistically reach, e.g. all 8 pawns of a
-      // color promoting to Met, is nowhere near that).
-      uint64_t material[PIECE_NB][32];
     }
   }
 
@@ -45,9 +40,6 @@ namespace Nebula{
     for (const Piece pc : pcs)
       for (Square s=SQ_A1; s<=SQ_H8; ++s)
         Zobrist::psq[pc][s]=rng.rand<uint64_t>();
-    for (const Piece pc : pcs)
-      for (int n=0; n<32; ++n)
-        Zobrist::material[pc][n]=rng.rand<uint64_t>();
     for (File f=FILE_A; f<=FILE_H; ++f)
       Zobrist::enpassant[f]=rng.rand<uint64_t>();
     for (int cr=NO_CASTLING; cr<=ANY_CASTLING; ++cr)
@@ -73,28 +65,6 @@ namespace Nebula{
             }
             count++;
           }
-  }
-
-  // Correction-history extension (material/minor-piece/non-pawn keys): a full
-  // recompute from board state, called at the end of every doMove() and inside
-  // setState() -- never incrementally XOR-maintained like pawnKey. See the
-  // StateInfo comment in position.h for why this tradeoff was chosen.
-  void Position::recomputeAuxKeys(StateInfo* si) const{
-    si->materialKey=0;
-    si->minorPieceKey=0;
-    si->nonPawnKey[WHITE]=si->nonPawnKey[BLACK]=0;
-    for (const Piece pc : pcs)
-      si->materialKey^=Zobrist::material[pc][pieceCount[pc]];
-    for (uint64_t b=pieces(); b;){
-      const Square s=popLsb(b);
-      const Piece pc=pieceOn(s);
-      const PieceType pt=typeOf(pc);
-      if (pt==PAWN)
-        continue;
-      si->nonPawnKey[colorOf(pc)]^=Zobrist::psq[pc][s];
-      if (pt==KNIGHT||pt==BISHOP)
-        si->minorPieceKey^=Zobrist::psq[pc][s];
-    }
   }
 
   Position& Position::set(const string& fenStr, const bool isChess960, StateInfo* si, Thread* th){
@@ -241,7 +211,6 @@ namespace Nebula{
     if (sideToMove==BLACK)
       si->key^=Zobrist::side;
     si->key^=Zobrist::castling[si->castlingRights];
-    recomputeAuxKeys(si);
   }
 
   Position& Position::set(const string& code, const Color c, StateInfo* si){
@@ -552,7 +521,6 @@ namespace Nebula{
     } else {
         updateMakrukCountingState(st->makrukCounting, *this);
     }
-    recomputeAuxKeys(st);
   }
 
   void Position::undoMove(const Move m){
