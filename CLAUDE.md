@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 41, 2026-10-17)
+## Current Status (as of Round 42, 2026-10-18)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-38 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-42 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -239,25 +239,18 @@ When working in this repository:
   directions regressed again (-27/-45 and -43/-37 vs Round 35 alone), matching Rounds 30/34's
   original sign exactly — the interaction doesn't change the conclusion. Both reverted to
   gate=300.
-* **Next priority**: every lever tried since Round 27 except Round 35 has failed to land
-  positive across repeated testing. **Three independent stacking attempts in a row** (Rounds
-  36, 37, 38 — mechanically unrelated to each other, Round 38 the most carefully implemented)
-  all eroded Round 35's signal rather than compounding it, each one larger than the last —
-  strong evidence the gain is fragile to further additions on this engine/dataset. Tuning
-  Round 35's own magnitude (Round 39) gave a genuinely inconclusive sign-flip rather than a
-  clean answer either way, leaving its calibration an open (if low-signal) question.
-  Re-checking the blend gate with Round 35 active (Rounds 40-41) confirmed gate=300 is robust
-  regardless. With blend-gate tuning (now checked both with and without Round 35), all three
-  original classical-eval ideas, full correction history, and a first magnitude-tuning attempt
-  all now tried, the remaining open items are: (1) further magnitude tuning of Round 35 (e.g.
-  a smaller/intermediate value, or a 2nd-seed-breaking 3-seed test on the doubled version) —
-  low expected signal-to-noise per this project's history of constant-tuning sweeps (Rounds
-  24-25: 3 candidates, all within 11 Elo); (2) Round 29's untuned pawn-only correction-history
-  constants, un-swept if revisited; (3) a deeper, riskier rook-trap-risk version that checks
-  actual capturability instead of raw mobility; (4) accepting Round 35 alone as the standing
-  candidate and looking for a lever outside this session's explored space entirely (NNUE
-  L1=1024 paired with larger L2/L3, a training-recipe sweep, etc.). None of these is a quick
-  next step the way Rounds 32-38 were.
+* **Next priority**: Round 42 (2026-10-18) tried the "lever outside this session's explored
+  space" option — fresh training data regenerated from the current (Round 33+35) engine,
+  Round 27's exact recipe otherwise unchanged — as the first half of a 2-track NNUE/training
+  plan (fresh data, then bigger architecture). Result: a small consistent regression
+  (-20/-30), **not deployed**, net stayed on Round 27. This leaves NNUE L1=1024 paired with
+  larger L2/L3 (Track B of that same plan, Round 31's own flagged-untried combination) as the
+  next concrete step, already in progress. Beyond that: (1) further magnitude tuning of Round
+  35 (e.g. a smaller/intermediate value, or a 2nd-seed-breaking 3-seed test on the doubled
+  version) — low expected signal-to-noise per this project's history of constant-tuning sweeps
+  (Rounds 24-25: 3 candidates, all within 11 Elo); (2) Round 29's untuned pawn-only
+  correction-history constants, un-swept if revisited; (3) a deeper, riskier rook-trap-risk
+  version that checks actual capturability instead of raw mobility.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -1059,6 +1052,55 @@ out — 300cp remains a genuine local optimum for the blend gate independent of 
 checking once (a real untested interaction, unlike re-running an already-settled question),
 and the answer is no, it doesn't change anything.
 
+### Round 42 — Fresh Training Data from the Post-Round-33/35 Engine: Small Regression, Not Deployed (2026-10-18)
+
+First of a 2-track NNUE/training plan (Track A: fresh data; Track B: bigger architecture,
+run in sequence per user's explicit choice). Mirrors Round 27's exact recipe — the only
+variable changed is which engine generated the self-play games: Round 27's data predates
+both Round 33's `evaluate.cpp` counting-draw fix and Round 35's promotion-race urgency
+heuristic, so this round regenerated data with the current engine instead.
+
+Froze `src/sf-kernel` to `/tmp/sf-kernel-round42-datagen` after a clean `build_verify.sh`
+pass on `classical-eval-new-heuristics`, then ran Round 27's exact 3-config self-play recipe
+against it (configA: movetime-a=200/depth-b=4; configC: movetime-a=150/depth-b=3; configD:
+movetime-a=30/depth-b=4; 150 games each, 450 total, 0 crashes). Converted, teacher-labeled
+with Fairy-SF depth=10 (24,543 positions scored), filtered to blend range (30-400cp) and
+combined with `train_round27_combined.tsv` as the base → **281,690 positions** (base
+267,971 + 13,719 accepted, 55.9% acceptance — slightly healthier than Round 27's own 53.1%).
+`dataset_summary.py` found nothing unhealthy (WDL 40.6/51.3/8.2%, no extreme score outliers).
+
+Trained 60 epochs, architecture unchanged (L1/L2/L3 = 512/32/32 — isolating data freshness
+as the only variable, matching Round 31's isolation discipline for its own single-variable
+test). Best epoch 57, val_loss 0.560082 — *worse* than Round 27's 0.553515, another data
+point for "val_loss doesn't predict Elo." Exported to VERSION3/MKN3 (L2 headroom 1.0×, same
+tight-by-design pattern as Round 31). Full verification gate passed clean (`build_tests.sh`,
+`build_verify.sh`, `perft 5` exact).
+
+**Gauntlet, 2 seeds vs Fairy-Stockfish-NNUE — small, consistent regression:**
+
+| Seed | Round 42 (fresh data) | Round 27 (ref) | Delta |
+|---|---|---|---|
+| 99 | 0W 86D 114L → -225 | -205 | -20 |
+| 4242 | 0W 84D 116L → -230 | -200 | -30 |
+
+Both seeds agree in direction (negative), 10 Elo apart — the same evidentiary pattern as
+Rounds 29/32/34 (small, consistent, individually inside the ~46 Elo noise band but reading as
+a real effect rather than pure noise). **Not deployed** — `evaluate.h` reverted to
+`3587509696.bin` (Round 27), rebuilt and re-verified (`build_verify.sh` + `perft 5` exact).
+Checkpoint `tools/training/makruk_round42.pt` (val_loss 0.560082) kept on disk, gitignored,
+for possible future ablation — same treatment as Rounds 12/15/16/28/31.
+
+**Takeaway**: regenerating training data with a *better* engine (Round 33's fix + Round 35's
+heuristic both live during self-play) did not reproduce Round 27's win — unlike Round 27,
+where the underlying engine had changed drastically (10x faster, SEE-correct) between data
+generations, the Round 33/35 changes are comparatively minor adjustments to classical eval,
+so there may simply not have been enough of a quality shift in the self-play games themselves
+to move the needle, even though the *playing* engine is measurably stronger. This echoes
+Round 28's finding that scaling/regenerating a working recipe isn't a guaranteed lever on its
+own. Track B of the same plan (NNUE L1=1024 paired with larger L2/L3 this time, unlike
+Round 31's L1-only isolation) is the next step, training on Round 27's dataset unchanged to
+isolate architecture as the only variable.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -1087,6 +1129,7 @@ and the answer is no, it doesn't change anything.
 | Round 39 (promotion-race urgency, magnitude doubled) | -179/-233 | +26/-33 | sign-flipped vs Round 35 itself (+19/-58) — inconclusive, not adopted; reverted to 1× magnitude |
 | Round 40 (blend gate narrowed 300→200, + Round 35) | -225/-220 | -20/-20 | both seeds worse than Round 35 alone (-27/-45) — confirmed regression, interaction doesn't help; reverted |
 | Round 41 (blend gate widened 300→450, + Round 35) | -241/-212 | -36/-12 | both seeds worse than Round 35 alone (-43/-37) — confirmed regression, interaction doesn't help; reverted |
+| Round 42 (fresh training data from the post-Round-33/35 engine) | -225/-230 | -20/-30 | both seeds negative, 10 Elo apart — small consistent regression (same pattern as 29/32/34), not deployed; Track A of a 2-track NNUE/training plan, Track B (bigger architecture) is next |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
@@ -1105,6 +1148,11 @@ to this table — different methodology, not true strength. See "Key Methodologi
   27's exact dataset), val_loss 0.553548, Elo -249/-269 (2-seed confirmed regression), not
   deployed, gitignored, kept for potential future ablation (e.g. pairing L1=1024 with a larger
   L2/L3 instead of leaving them at 32)
+* `tools/training/makruk_round42.pt` — Round 42 checkpoint (fresh training data from the
+  post-Round-33/35 engine, architecture unchanged 512/32/32), val_loss 0.560082, Elo
+  -225/-230 (2-seed, small consistent regression), not deployed, gitignored, kept for
+  potential future ablation. `tools/training/train_round42_combined.tsv` (281,690 positions)
+  kept alongside it.
 * `src/3769833465.bin` — Round 23 VERSION3/MKN3 (int16 L2), archived
 * `src/2020277415.bin` — Round 14 net, MKN2 int16, L1=512 — same underlying weights as
   3769833465.bin before L2 quantization, archived
