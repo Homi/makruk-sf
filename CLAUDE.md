@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 42, 2026-10-18)
+## Current Status (as of Round 43, 2026-10-24)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-42 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-43 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -239,18 +239,20 @@ When working in this repository:
   directions regressed again (-27/-45 and -43/-37 vs Round 35 alone), matching Rounds 30/34's
   original sign exactly — the interaction doesn't change the conclusion. Both reverted to
   gate=300.
-* **Next priority**: Round 42 (2026-10-18) tried the "lever outside this session's explored
-  space" option — fresh training data regenerated from the current (Round 33+35) engine,
-  Round 27's exact recipe otherwise unchanged — as the first half of a 2-track NNUE/training
-  plan (fresh data, then bigger architecture). Result: a small consistent regression
-  (-20/-30), **not deployed**, net stayed on Round 27. This leaves NNUE L1=1024 paired with
-  larger L2/L3 (Track B of that same plan, Round 31's own flagged-untried combination) as the
-  next concrete step, already in progress. Beyond that: (1) further magnitude tuning of Round
-  35 (e.g. a smaller/intermediate value, or a 2nd-seed-breaking 3-seed test on the doubled
-  version) — low expected signal-to-noise per this project's history of constant-tuning sweeps
-  (Rounds 24-25: 3 candidates, all within 11 Elo); (2) Round 29's untuned pawn-only
-  correction-history constants, un-swept if revisited; (3) a deeper, riskier rook-trap-risk
-  version that checks actual capturability instead of raw mobility.
+* **Next priority**: the 2-track NNUE/training plan (Round 42: fresh data; Round 43: bigger
+  architecture) is now complete — **both tracks regressed**. Round 42 (fresh data from the
+  current engine, architecture unchanged): small consistent regression (-20/-30). Round 43
+  (L1=1024/L2=64/L3=64 on Round 27's unchanged dataset — the combination Round 31 flagged as
+  untried, since Round 31 tested L1=1024 alone with L2/L3 left at 32): a **larger, clearly
+  confirmed** regression (-74/-82, both seeds clear the noise band individually) — the worst
+  NNUE-architecture result in this project's history, closing out NNUE architecture-scaling as
+  a lever entirely (L1 alone, and now L1+L2+L3 together, both fail). Net stays on Round 27.
+  Remaining options, none a quick win: (1) further magnitude tuning of Round 35 (e.g. a
+  smaller/intermediate value, or a 2nd-seed-breaking 3-seed test on the doubled version) — low
+  expected signal-to-noise per this project's history of constant-tuning sweeps (Rounds 24-25:
+  3 candidates, all within 11 Elo); (2) Round 29's untuned pawn-only correction-history
+  constants, un-swept if revisited; (3) a deeper, riskier rook-trap-risk version that checks
+  actual capturability instead of raw mobility.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -1101,6 +1103,59 @@ own. Track B of the same plan (NNUE L1=1024 paired with larger L2/L3 this time, 
 Round 31's L1-only isolation) is the next step, training on Round 27's dataset unchanged to
 isolate architecture as the only variable.
 
+### Round 43 — NNUE L1=1024/L2=64/L3=64: Confirmed Regression, Worst NNUE-Architecture Result, Not Deployed (2026-10-24)
+
+Track B of the 2-track NNUE/training plan (Track A was Round 42). Round 31 tested
+`MknnMaxL1` doubled 512→1024 in isolation (L2/L3 left at 32) and got a confirmed regression;
+Round 31's own write-up explicitly flagged that L2/L3 were never scaled up alongside L1,
+leaving that combination untested. This round paired the wider L1 with wider L2/L3 too:
+`MknnMaxL1` 512→1024 in `src/nnue/mknn_accumulator.h` (verified backward-compatible/bit-exact
+with the Round 27 net first), then `train.py`'s `L1, L2, L3 = 512, 32, 32` →
+`1024, 64, 64`. Trained on `train_round27_combined.tsv` — the *exact same dataset* Round 27
+and Round 31 both used — so any Elo change is attributable to architecture alone, not data.
+
+Training survived a real mid-run machine reboot at epoch 58/60 (not a code bug — confirmed
+via `journalctl`: a full reboot, `systemd-oomd`/`NetworkManager` restarting, not an OOM-kill
+of the training process specifically) and resumed cleanly via `--resume` for the final 2
+epochs. Best epoch 57 (0-indexed), val_loss **0.553249** — essentially identical to Round
+27's 0.553515 (L1=512) and Round 31's 0.553548 (L1=1024/L2=32), the third confirmation of
+"val_loss doesn't predict Elo" at this architecture family. Exported to VERSION3/MKN3; L2
+int16 overflow-safety headroom 1.0× (tight by design, matching Round 31's pattern at the
+wider architecture too — the auto-calibration always picks the highest-precision scale the
+safety margin allows). Full verification gate (`build_tests.sh`, `build_verify.sh`, `perft 5`
+exact) passed clean, including 188/188 NNUE incremental-accumulator bit-exactness checks at
+the new L1=1024 width.
+
+**Gauntlet, confirmed at 2 seeds vs Fairy-Stockfish-NNUE — clear regression, the largest
+NNUE-architecture result in this project's history:**
+
+| Seed | Round 43 (L1=1024/L2=64/L3=64) | Round 27 (ref, L1=512/32/32) | Delta |
+|---|---|---|---|
+| 99 | 0W 67D 133L → -279 | -205 | **-74** |
+| 4242 | 0W 66D 134L → -282 | -200 | **-82** |
+
+Both seeds agree in direction (negative) and **both individually clear** the ~46 Elo
+single-seed noise band — a confirmed regression by the strongest possible evidentiary
+standard this project uses, larger even than Round 31's own confirmed regression (-44/-69).
+**Not deployed** — `evaluate.h` reverted to `3587509696.bin` (Round 27), rebuilt and
+re-verified (`build_verify.sh` + `perft 5` exact). The L1=1024/L2=64/L3=64 infra changes
+(`MknnMaxL1` cap, `train.py`'s constants) were split onto their own branch
+(`nnue-l1024-l2l3-64-round43`), not merged to `classical-eval-new-heuristics`'s net-selection
+state — same treatment Round 31 gave its own `nnue-l1-1024` branch. Checkpoint
+`tools/training/makruk_round43.pt` (val_loss 0.553249) kept on disk, gitignored, for
+potential future ablation.
+
+**Takeaway**: pairing wider L2/L3 with the wider L1 didn't just fail to fix Round 31's
+regression — it made it substantially *worse* (-44/-69 → -74/-82). This rules out "L2/L3
+were left too narrow" as the explanation for Round 31's result and closes out NNUE
+architecture-scaling as a lever on this dataset/training recipe entirely: more capacity,
+in any combination tried so far (L1 alone, or L1+L2+L3 together), consistently hurts rather
+than helps. Combined with Round 42's result (fresh data, same architecture: small
+regression), both halves of the "two genuinely untried NNUE/training levers" plan from
+Rounds 31-41's accumulated findings have now failed, leaving classical-eval constant tuning
+(Round 29's correction-history sweep, Round 35's magnitude) as the only remaining low-effort
+options — see "Next priority" above.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -1130,6 +1185,7 @@ isolate architecture as the only variable.
 | Round 40 (blend gate narrowed 300→200, + Round 35) | -225/-220 | -20/-20 | both seeds worse than Round 35 alone (-27/-45) — confirmed regression, interaction doesn't help; reverted |
 | Round 41 (blend gate widened 300→450, + Round 35) | -241/-212 | -36/-12 | both seeds worse than Round 35 alone (-43/-37) — confirmed regression, interaction doesn't help; reverted |
 | Round 42 (fresh training data from the post-Round-33/35 engine) | -225/-230 | -20/-30 | both seeds negative, 10 Elo apart — small consistent regression (same pattern as 29/32/34), not deployed; Track A of a 2-track NNUE/training plan, Track B (bigger architecture) is next |
+| Round 43 (NNUE L1=1024/L2=64/L3=64, same Round 27 dataset) | -279/-282 | -74/-82 | both seeds confirmed regression, both individually clear the noise band — worst NNUE-architecture result in this project's history, closes out that lever entirely; not deployed |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
@@ -1153,6 +1209,11 @@ to this table — different methodology, not true strength. See "Key Methodologi
   -225/-230 (2-seed, small consistent regression), not deployed, gitignored, kept for
   potential future ablation. `tools/training/train_round42_combined.tsv` (281,690 positions)
   kept alongside it.
+* `tools/training/makruk_round43.pt` — Round 43 checkpoint (NNUE L1=1024/L2=64/L3=64, Round
+  27's exact dataset), val_loss 0.553249, Elo -279/-282 (2-seed confirmed regression, both
+  seeds clear the noise band — the worst NNUE-architecture result to date), not deployed,
+  gitignored, kept for potential future ablation. Infra changes (`MknnMaxL1` cap, `train.py`
+  constants) live on branch `nnue-l1024-l2l3-64-round43`, not merged.
 * `src/3769833465.bin` — Round 23 VERSION3/MKN3 (int16 L2), archived
 * `src/2020277415.bin` — Round 14 net, MKN2 int16, L1=512 — same underlying weights as
   3769833465.bin before L2 quantization, archived
