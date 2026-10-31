@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 43, 2026-10-24)
+## Current Status (as of Round 44, 2026-11-01)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-43 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-44 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -239,20 +239,19 @@ When working in this repository:
   directions regressed again (-27/-45 and -43/-37 vs Round 35 alone), matching Rounds 30/34's
   original sign exactly — the interaction doesn't change the conclusion. Both reverted to
   gate=300.
-* **Next priority**: the 2-track NNUE/training plan (Round 42: fresh data; Round 43: bigger
-  architecture) is now complete — **both tracks regressed**. Round 42 (fresh data from the
-  current engine, architecture unchanged): small consistent regression (-20/-30). Round 43
-  (L1=1024/L2=64/L3=64 on Round 27's unchanged dataset — the combination Round 31 flagged as
-  untried, since Round 31 tested L1=1024 alone with L2/L3 left at 32): a **larger, clearly
-  confirmed** regression (-74/-82, both seeds clear the noise band individually) — the worst
-  NNUE-architecture result in this project's history, closing out NNUE architecture-scaling as
-  a lever entirely (L1 alone, and now L1+L2+L3 together, both fail). Net stays on Round 27.
-  Remaining options, none a quick win: (1) further magnitude tuning of Round 35 (e.g. a
-  smaller/intermediate value, or a 2nd-seed-breaking 3-seed test on the doubled version) — low
-  expected signal-to-noise per this project's history of constant-tuning sweeps (Rounds 24-25:
-  3 candidates, all within 11 Elo); (2) Round 29's untuned pawn-only correction-history
-  constants, un-swept if revisited; (3) a deeper, riskier rook-trap-risk version that checks
-  actual capturability instead of raw mobility.
+* **Next priority**: Round 44 (2026-11-01) tested the teacher-depth-vs-data-volume trade-off
+  (depth=8 teacher labeling, ~4x Round 42's self-play volume) — also a small consistent
+  regression (-12/-33 vs Round 27), and roughly flat vs Round 42 itself (+8/-3), so trading
+  depth for volume at this scale didn't clearly help *or* hurt relative to Round 42's own
+  depth=10/smaller-volume recipe. This closes out the "two previously unexamined NNUE/
+  training levers" identified after Round 43 (architecture scaling, closed in Round 43;
+  teacher-depth/volume trade-off, closed here) — **both have now failed to beat Round 27**.
+  Net stays on Round 27. The next genuinely untried lever is a training-objective change
+  (WDL-blended loss instead of pure CP-regression — motivated by "val_loss never predicts
+  Elo" holding across 8 independent rounds now). Lower-priority options, none a quick win:
+  (1) further magnitude tuning of Round 35's promotion-urgency constant; (2) Round 29's
+  untuned pawn-only correction-history constants, un-swept if revisited; (3) a deeper, riskier
+  rook-trap-risk version that checks actual capturability instead of raw mobility.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
 * **Unfixed**: a depth≥9 SIGSEGV in `setCheckInfo` (empty king bitboard) has never been
@@ -1156,6 +1155,68 @@ Rounds 31-41's accumulated findings have now failed, leaving classical-eval cons
 (Round 29's correction-history sweep, Round 35's magnitude) as the only remaining low-effort
 options — see "Next priority" above.
 
+### Round 44 — Teacher-Depth vs Data-Volume Trade-off: Small Regression, Roughly Flat vs Round 42, Not Deployed (2026-11-01)
+
+The first of two previously-unexamined NNUE/training levers identified after Round 43 closed
+out architecture scaling (the other being a training-objective change, still untried).
+`teacher_label.py --depth 10` has been fixed since Round 27 despite the script's own default
+being `--depth 8`; depth is normally the dominant cost in alpha-beta search, so this round
+tested whether trading teacher precision for data volume — label a much larger self-play
+pool more shallowly — beats labeling a smaller pool more deeply.
+
+**Calibration** (on a 2,000-position slice of Round 42's leftover raw pool): depth=8 ran at
+~150 pos/sec vs depth=10's known ~45-48 pos/sec (~3.1-3.3x faster), comfortably clearing the
+plan's 2x go/no-go threshold; depth=6 measured ~500 pos/sec (~10-11x), noted for a possible
+future round but not used here.
+
+**Self-play generation**: reused Round 27/42's exact 3-config recipe unchanged, scaled ~4x
+Round 42's volume (600 games/config vs 150, split into 2x300 sub-batches each for resilience
+against `gauntlet.py`'s lack of `--resume`) — 1,800 games total, ~2.3 hr unattended, 0
+crashes, yielding 107,404 raw positions (vs Round 42's 26,307). Teacher-labeled at depth=8:
+99,206 scored in 10.5 minutes (169 pos/sec, matching calibration). Filtered to blend range
+(30-400cp) and combined with `train_round27_combined.tsv` — **56,812 accepted (57.3%
+acceptance), 4.14x Round 42's 13,719-position addition** — combining to **324,783 positions
+total**, the largest single-round dataset in this project's history. `dataset_summary.py`
+found nothing unhealthy (0.3% duplication, no extreme score outliers).
+
+Trained 60 epochs, architecture unchanged (512/32/32 — isolating the depth/volume trade-off
+as the only variable). Survived an unattended-training interruption mid-epoch-1 (process
+stopped for a machine shutdown before its first checkpoint ever saved — not a crash, just no
+checkpoint existed yet to resume from, so the next session restarted cleanly from epoch 0
+rather than resuming). Best epoch 60 (the final epoch itself), val_loss **0.568544** — worse
+than Round 27's 0.553515 and Round 42's 0.560082, continuing this project's "val_loss doesn't
+predict Elo" pattern across yet another round. Exported to VERSION3/MKN3 (L2 headroom 1.0×,
+consistent tight-by-design pattern). Full verification gate passed clean throughout
+(`build_tests.sh`, `build_verify.sh`, `perft 5` exact).
+
+**Gauntlet, 2 seeds vs Fairy-Stockfish-NNUE — small consistent regression vs Round 27, flat
+vs Round 42:**
+
+| Seed | Round 44 (depth=8, 4x volume) | Round 27 (ref) | Round 42 (ref, depth=10, 1x volume) |
+|---|---|---|---|
+| 99 | 0W 89D 111L → -217 | -205 (Δ **-12**) | -225 (Δ **+8**) |
+| 4242 | 0W 83D 117L → -233 | -200 (Δ **-33**) | -230 (Δ **-3**) |
+
+Both seeds negative vs Round 27 — the same small-consistent-regression evidentiary pattern
+as Rounds 29/32/34/42 (individually inside the ~46 Elo noise band, but consistent in sign).
+Against Round 42 specifically, the deltas are tiny and sign-inconsistent (+8/-3) — trading
+teacher depth for 4x the volume neither clearly helped nor hurt relative to Round 42's
+depth=10/1x-volume recipe. **Not deployed** — `evaluate.h` reverted to `3587509696.bin`
+(Round 27), rebuilt and re-verified (`build_verify.sh` + `perft 5` exact). Checkpoint
+`tools/training/makruk_round44.pt` (val_loss 0.568544) and `train_round44_combined.tsv`
+(324,783 positions) kept on disk, gitignored, for potential future ablation.
+
+**Takeaway**: the depth/volume trade-off is not a lever that moves Elo at this scale (4x) —
+whatever signal a 4x-larger, shallower-labeled slice adds is approximately cancelled out by
+the extra label noise from the shallower teacher search, landing within noise of Round 42's
+smaller/deeper-labeled slice rather than clearly beating or losing to it. Combined with Round
+43 (architecture scaling, confirmed regression), both of the two genuinely untried NNUE/
+training levers identified since Round 31 have now failed to beat Round 27. The next
+candidate lever is qualitatively different from everything tried in Rounds 28-44 so far: a
+training-objective change (WDL-blended loss) rather than another variation on data or
+architecture — motivated directly by the "val_loss never predicts Elo" finding that has now
+held independently across 8 rounds (9, 10, 15, 16, 28, 31, 42, 43, 44).
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -1186,6 +1247,7 @@ options — see "Next priority" above.
 | Round 41 (blend gate widened 300→450, + Round 35) | -241/-212 | -36/-12 | both seeds worse than Round 35 alone (-43/-37) — confirmed regression, interaction doesn't help; reverted |
 | Round 42 (fresh training data from the post-Round-33/35 engine) | -225/-230 | -20/-30 | both seeds negative, 10 Elo apart — small consistent regression (same pattern as 29/32/34), not deployed; Track A of a 2-track NNUE/training plan, Track B (bigger architecture) is next |
 | Round 43 (NNUE L1=1024/L2=64/L3=64, same Round 27 dataset) | -279/-282 | -74/-82 | both seeds confirmed regression, both individually clear the noise band — worst NNUE-architecture result in this project's history, closes out that lever entirely; not deployed |
+| Round 44 (teacher depth=8, ~4x Round 42's self-play volume) | -217/-233 | -12/-33 | both seeds negative vs Round 27 (small consistent regression); roughly flat vs Round 42 itself (+8/-3) — depth/volume trade-off doesn't move Elo at this scale; not deployed |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
@@ -1214,6 +1276,11 @@ to this table — different methodology, not true strength. See "Key Methodologi
   seeds clear the noise band — the worst NNUE-architecture result to date), not deployed,
   gitignored, kept for potential future ablation. Infra changes (`MknnMaxL1` cap, `train.py`
   constants) live on branch `nnue-l1024-l2l3-64-round43`, not merged.
+* `tools/training/makruk_round44.pt` — Round 44 checkpoint (teacher depth=8, ~4x Round 42's
+  self-play volume, architecture unchanged 512/32/32), val_loss 0.568544, Elo -217/-233
+  (2-seed, small consistent regression vs Round 27, roughly flat vs Round 42), not deployed,
+  gitignored, kept for potential future ablation. `tools/training/train_round44_combined.tsv`
+  (324,783 positions, the largest dataset in this project's history) kept alongside it.
 * `src/3769833465.bin` — Round 23 VERSION3/MKN3 (int16 L2), archived
 * `src/2020277415.bin` — Round 14 net, MKN2 int16, L1=512 — same underlying weights as
   3769833465.bin before L2 quantization, archived
