@@ -559,10 +559,11 @@ to this table — different methodology, not true strength. See "Key Methodologi
   (not comparable to Round 27's — validation target itself changed), Elo -244/-230 (2-seed,
   small consistent regression), not deployed, gitignored, kept for potential future ablation.
   `src/376020885.bin` (the exported candidate net, superseded) also kept on disk, gitignored.
-* `src/3769833465.bin` — Round 23 VERSION3/MKN3 (int16 L2), archived
-* `src/2020277415.bin` — Round 14 net, MKN2 int16, L1=512 — same underlying weights as
-  3769833465.bin before L2 quantization, archived
-* `src/150547052.bin` — Round 16 net (first book-paired round), inconclusive, untracked
+* Round 23's net (formerly tracked as `src/3769833465.bin`, VERSION3/MKN3 int16 L2) was
+  removed from the repo (2026-11-14) — not needed to build, since only the embedded net
+  above is; still recoverable from git history if needed for reference.
+* `src/2020277415.bin` (Round 14, MKN2 int16, pre-L2-quantization) and `src/150547052.bin`
+  (Round 16, first book-paired net, inconclusive) are likewise superseded and not tracked.
 * `tools/training/makruk_round12.pt`, `makruk_round15.pt` — regression/noise-affected
   checkpoints kept for potential future ablation, gitignored
 
