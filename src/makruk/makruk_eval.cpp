@@ -162,18 +162,12 @@ static Score rookActivity(const Position& pos, Color c) {
     return s;
 }
 
-// Promotion-race urgency: a passed pawn (no enemy pawn can ever block or capture
-// it via passedPawnSpan()'s standard own-file-ahead + adjacent-files-ahead test)
-// gets a bonus that grows sharply the closer it is to promotion. Makruk pawns
-// only have 3 ranks to cross before promoting to Met (relativeRank 2 start ->
-// 4 one-step-away, promoting at 5), so "urgency" compresses into a short,
-// high-stakes race rather than the long march of chess passed pawns -- the
-// flat material+PST table alone (PawnPST's rank-4 eg values are actually
-// slightly negative) gives no signal that a one-step-from-promotion runner is
-// usually close to winning a full Met's worth of material.
-// Indexed by relativeRank - 2: pawns only ever occupy relativeRank 2 (start),
-// 3, or 4 (one step from promotion) -- relativeRank 5 is the promotion square
-// itself, where the piece has already become a Met.
+// Bonus for an unblockable passed pawn (via passedPawnSpan()), growing sharply
+// near promotion: Makruk pawns promote after only 3 ranks, so a runner one
+// step away is usually close to winning a full Met -- signal PawnPST alone
+// doesn't provide (its rank-4 eg values are actually slightly negative).
+// Indexed by relativeRank - 2 (2=start, 3=two steps out, 4=one step out; 5 is
+// the promotion square itself, already a Met by then).
 static constexpr Score PromotionUrgency[3] = {
     S( 0,  0),   // relativeRank 2 (start rank) -- not advanced enough to matter yet
     S( 0,  5),   // relativeRank 3 (2 steps from promotion)
@@ -317,15 +311,10 @@ static Score mopupBonus(const Position& pos, Color stronger) {
     return S(edgeBonus + closeBonus, edgeBonus + closeBonus);
 }
 
-// Counting-danger awareness: Makruk's counting rule compresses a bare-king
-// endgame to a draw once the weaker side's claimed count reaches its limit
-// (see makruk_counting.h). Without any warning, the search only "discovers"
-// this at the exact leaf where the limit is hit; the mop-up bonus above is
-// otherwise flat regardless of how close that cliff is. Amplify the mop-up
-// bonus (up to +50% right at the limit) so moves that make real progress
-// toward mate (the same corner/king distances the bonus already measures)
-// are valued more as the clock runs down, instead of search treating an
-// early, leisurely approach the same as a last-chance one.
+// Scales the mop-up bonus up to +50% as the counting-draw ply count (see
+// makruk_counting.h) approaches its limit, so search feels more urgency to
+// make real progress as the draw cliff nears instead of treating an early,
+// leisurely approach the same as a last-chance one.
 static Score applyCountingUrgency(Score bonus, const Position& pos) {
     const MakrukCountingState& cs = pos.state()->makrukCounting;
     if (!cs.active || cs.limit <= 0) return bonus;
