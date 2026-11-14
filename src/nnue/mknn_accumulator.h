@@ -13,10 +13,11 @@
 namespace Nebula::Eval::Nnue {
 
 // Compile-time cap on the feature-transformer width supported by the incremental
-// accumulator cache. The currently deployed net (2020277415.bin) uses L1=512;
-// earlier nets used 256. A VERSION2 net with L1 > MknnMaxL1 still loads and
-// evaluates correctly, but MknnEvaluator falls back to full-refresh on every
-// call (see MknnEvaluator::load()'s incremental_ flag) rather than overflow.
+// accumulator cache. Every net trained in this project so far uses L1=512 (see
+// CLAUDE.md's NNUE section for current architecture). A VERSION2 net with
+// L1 > MknnMaxL1 still loads and evaluates correctly, but MknnEvaluator falls
+// back to full-refresh on every call (see MknnEvaluator::load()'s incremental_
+// flag) rather than overflow.
 inline constexpr int MknnMaxL1 = 512;
 
 struct alignas(64) MknnAccumulator {

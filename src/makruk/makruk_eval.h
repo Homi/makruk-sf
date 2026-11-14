@@ -1,7 +1,7 @@
 // Makruk classical evaluation subsystem.
 //
-// Provides a hand-crafted evaluation function for Makruk positions.
-// Used as the primary evaluation until a Makruk-specific NNUE is trained.
+// Hand-crafted evaluation for Makruk positions. Not a fallback: evaluate.cpp
+// blends this with NNUE at all times (see CLAUDE.md "Evaluation").
 //
 // Makruk-SF is a GPLv3 project derived from sf-kernel / Stockfish.
 // Makruk-SF-specific modifications maintained by Homi <bhome1@hotmail.com>.
