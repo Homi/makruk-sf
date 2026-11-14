@@ -3,10 +3,10 @@
 train.py — Minimal PyTorch NNUE trainer for Makruk-SF.
 
 Architecture matches half_ka_v2_makruk.h layout:
-  FT  : Linear(22528 → L1=256) × 2 perspectives, CReLU  (shared weights)
-  L2  : Linear(512 → 32),  CReLU
-  L3  : Linear(32  → 32),  CReLU
-  out : Linear(32  →  1),  Sigmoid
+  FT  : Linear(22528 → L1=512) × 2 perspectives, CReLU  (shared weights)
+  L2  : Linear(2*L1 → 32),  CReLU
+  L3  : Linear(32   → 32),  CReLU
+  out : Linear(32   →  1),  Sigmoid
 
 Training target (per position):
   target = lam * sigmoid(score_stm / 400) + (1 - lam) * wdl_stm
