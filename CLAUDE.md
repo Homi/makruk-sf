@@ -184,7 +184,7 @@ When working in this repository:
 
 ---
 
-## Current Status (as of Round 44, 2026-11-01)
+## Current Status (as of Round 45, 2026-11-08)
 
 * **Embedded net**: `src/3587509696.bin` (still Round 27 — Rounds 28-31 were all
   negative/inconclusive, not deployed). Check `src/evaluate.h`'s `NnueNetDefaultName` for
@@ -195,7 +195,7 @@ When working in this repository:
 * **True strength** (book-paired, equal-condition 200ms/move, vs Fairy-Stockfish-NNUE, the
   only trustworthy Elo methodology in this project's history — see "Handicap gauntlets are not
   true strength" below): progressed **-372 → -260 → -205/-200** across Rounds 18-27, then held
-  there through Rounds 28-44 (all not deployed). Rounds 18-26 were engine-side fixes
+  there through Rounds 28-45 (all not deployed). Rounds 18-26 were engine-side fixes
   (incremental NNUE fix, two real `seeGe()` bugs, fast-math, heap-alloc elimination, L2
   quantization, a vectorization-blocking bug fix); two consecutive large nps wins there (Round
   23 +34%, Round 26 +42.7%) produced ~0 combined net Elo, closing the nps gap with
@@ -243,14 +243,18 @@ When working in this repository:
   (depth=8 teacher labeling, ~4x Round 42's self-play volume) — also a small consistent
   regression (-12/-33 vs Round 27), and roughly flat vs Round 42 itself (+8/-3), so trading
   depth for volume at this scale didn't clearly help *or* hurt relative to Round 42's own
-  depth=10/smaller-volume recipe. This closes out the "two previously unexamined NNUE/
+  depth=10/smaller-volume recipe. This closed out the "two previously unexamined NNUE/
   training levers" identified after Round 43 (architecture scaling, closed in Round 43;
-  teacher-depth/volume trade-off, closed here) — **both have now failed to beat Round 27**.
-  Net stays on Round 27. The next genuinely untried lever is a training-objective change
-  (WDL-blended loss instead of pure CP-regression — motivated by "val_loss never predicts
-  Elo" holding across 8 independent rounds now). Lower-priority options, none a quick win:
-  (1) further magnitude tuning of Round 35's promotion-urgency constant; (2) Round 29's
-  untuned pawn-only correction-history constants, un-swept if revisited; (3) a deeper, riskier
+  teacher-depth/volume trade-off, closed here) — **both failed to beat Round 27**. Round 45
+  then tried the genuinely new lever flagged at that point — a training-objective change
+  (lambda-annealed WDL/cp blend, 0.7→0.3 across the 60 epochs, instead of a constant
+  lam=0.7) — and also landed a small consistent regression (-39/-30 vs Round 27). **This
+  closes out the training-objective-change hypothesis in its tested direction** (anneal
+  *toward* WDL-dominance). Net stays on Round 27 after 18 straight rounds (28-45) failing to
+  beat it. Lower-priority options, none a quick win: (1) the *reverse* anneal direction
+  (start WDL-dominant, finish cp-dominant — genuinely untested, not a repeat of Round 45);
+  (2) further magnitude tuning of Round 35's promotion-urgency constant; (3) Round 29's
+  untuned pawn-only correction-history constants, un-swept if revisited; (4) a deeper, riskier
   rook-trap-risk version that checks actual capturability instead of raw mobility.
 * **Closed**: a central-control classical-eval experiment (Khon/Met, see below) concluded
   inconclusive and was not merged — see Development History.
@@ -1217,6 +1221,79 @@ training-objective change (WDL-blended loss) rather than another variation on da
 architecture — motivated directly by the "val_loss never predicts Elo" finding that has now
 held independently across 8 rounds (9, 10, 15, 16, 28, 31, 42, 43, 44).
 
+### Round 45 — Lambda-Annealed WDL Blend (Training-Objective Change): Small Regression, Not Deployed (2026-11-08)
+
+The genuinely new lever flagged after Round 44 closed out both previously-untried NNUE/
+training levers (architecture scaling, Round 43; teacher-depth/volume trade-off, Round 44) —
+the first change to the training *objective* itself rather than its data or architecture,
+directly motivated by "val_loss never predicts Elo" holding across 9 independent rounds (9,
+10, 15, 16, 28, 31, 42, 43, 44) and this project's own documented material-underestimation
+finding (Rounds 6, 7, 30).
+
+`train.py`'s target blend — `target = lam * sigmoid(score_stm/400) + (1-lam) * wdl_stm` —
+has used a single **constant** `lam=0.7` (cp-dominant) for all 60 epochs of every round ever
+run, meaning even the final, calibration-fine-tuning epochs stayed 70% anchored to the
+teacher's cp curve rather than the real decisive outcomes. Refactored the blend to happen
+**per-epoch in the training loop** rather than once per sample inside `MakrukDataset`
+(`MakrukDataset.__getitem__`/`_collate` now return the raw `score_stm`/`wdl_stm` pair
+unblended), so `lam` can vary across epochs:
+`lam_t = lam_start + (lam_end - lam_start) * (epoch-1) / max(1, epochs-1)`, annealing from the
+established `lam_start=0.7` down to `lam_end=0.3` by the final epoch — pulling the net's final
+calibration toward ground-truth decisive outcomes instead of the teacher's cp curve.
+Validation stays fixed at `lam_end` (not the per-epoch annealed value) so val_loss remains
+comparable epoch-to-epoch within this round — though **not round-to-round against Round 27's
+val_loss**, since the validation target itself changed from `lam=0.7` to `lam=0.3` by
+construction, not by training dynamics (flagged up front as expected, not a red flag).
+`--lam-start`/`--lam-end` both default to `0.7`, so omitting them reproduces the exact old
+constant-blend behavior bit-for-bit — the only code change this round, no C++/architecture
+touched. Trained on the exact same `train_round27_combined.tsv` Round 27/31 both used,
+isolating training-objective as the sole variable (matching Round 31's isolation discipline).
+
+A short 3-epoch×2-config calibration run (reduced from the plan's original 10-epoch estimate
+after direct timing showed the full dataset takes ~11.25 min/epoch, not the planned "~15-20
+min total") confirmed the refactor is behavior-preserving (`--lam-start 0.7 --lam-end 0.7`
+tracked Round 27's own early-epoch loss shape closely) and that the annealed path trains
+stably (no NaN/divergence, smoothly shifting loss trend) before committing to the full run.
+The full 60-epoch run (~20hr, survived one planned mid-run shutdown/resume at epoch 18 — since
+`lam_t` is a pure function of `epoch`/`args`, not stored state, it resumed exactly on schedule,
+`lam=0.578` at epoch 19 matching the formula) finished at best epoch 58, val_loss **0.483230**
+— not comparable to Round 27's 0.553515 for the reason above. Exported to VERSION3/MKN3; full
+verification gate passed clean (`build_tests.sh`, `build_verify.sh`, `perft 5` exact).
+
+**Gauntlet, 2 seeds vs Fairy-Stockfish-NNUE — small, consistent regression:**
+
+| Seed | Round 45 (lambda-annealed 0.7→0.3) | Round 27 (ref) | Delta |
+|---|---|---|---|
+| 99 | 0W 79D 121L → -244 | -205 | **-39** |
+| 4242 | 0W 84D 116L → -230 | -200 | **-30** |
+
+Both seeds negative and consistent (within 9 Elo of each other) — the same evidentiary
+pattern as Rounds 29/32/34/42/44 (individually inside the ~46 Elo noise band, but consistent
+in sign, reading as a real small effect rather than pure noise). **Not deployed** —
+`evaluate.h` reverted to `3587509696.bin` (Round 27), rebuilt and re-verified
+(`build_verify.sh` + `perft 5` exact). Checkpoint `tools/training/makruk_round45.pt` (val_loss
+0.483230) kept on disk, gitignored, for potential future ablation. **Unlike Round 31/38/43's
+pattern of branching off architecture-changing infra when discarded, the `train.py` refactor
+itself is kept directly on `classical-eval-new-heuristics`** (not split to a side branch): it
+is backward-compatible by construction (default `--lam-start`/`--lam-end 0.7` reproduces the
+old constant-blend path bit-for-bit) and changes no C++/architecture, so there is no
+accidental-merge risk the way a new Zobrist table or a wider NNUE layer would carry.
+
+**Takeaway**: annealing the WDL/cp blend toward result-dominance did not help — the training
+objective is not the ceiling after all, at least not in this specific direction. This closes
+out the "training-objective change" hypothesis as tested (anneal toward WDL-dominance); the
+*reverse* direction (start WDL-dominant, finish cp-dominant — i.e. let the net lock onto
+real material scale early, then fine-tune positional nuance against the teacher's smoother cp
+curve late) is a genuinely different, untested hypothesis, not a repeat of this result. This
+also marks 18 straight rounds (28-45) — covering data scale/freshness, search-side correction
+history, blend-gate tuning in both directions, NNUE architecture scaling in two
+configurations, teacher-depth/volume trade-off, three classical-eval additions (one kept, two
+reverted) stacked three ways, and now the training objective itself — none of which has beaten
+Round 27. Round 27 increasingly looks like a genuine local optimum for this architecture/data
+family rather than an easy stepping stone; the project's own target (-150 Elo, needing +50 to
++55 from today's -205/-200) remains unreached, and every single-lever variation tried since
+has either regressed or landed within noise.
+
 ---
 
 ## Benchmark History (true equal-condition Elo vs Fairy-Stockfish-NNUE, book-paired, 200ms both sides)
@@ -1248,6 +1325,7 @@ held independently across 8 rounds (9, 10, 15, 16, 28, 31, 42, 43, 44).
 | Round 42 (fresh training data from the post-Round-33/35 engine) | -225/-230 | -20/-30 | both seeds negative, 10 Elo apart — small consistent regression (same pattern as 29/32/34), not deployed; Track A of a 2-track NNUE/training plan, Track B (bigger architecture) is next |
 | Round 43 (NNUE L1=1024/L2=64/L3=64, same Round 27 dataset) | -279/-282 | -74/-82 | both seeds confirmed regression, both individually clear the noise band — worst NNUE-architecture result in this project's history, closes out that lever entirely; not deployed |
 | Round 44 (teacher depth=8, ~4x Round 42's self-play volume) | -217/-233 | -12/-33 | both seeds negative vs Round 27 (small consistent regression); roughly flat vs Round 42 itself (+8/-3) — depth/volume trade-off doesn't move Elo at this scale; not deployed |
+| Round 45 (lambda-annealed WDL blend, 0.7→0.3, same Round 27 dataset) | -244/-230 | -39/-30 | both seeds negative, 9 Elo apart — small consistent regression (same pattern as 29/32/34/42/44), not deployed; closes out the training-objective-change hypothesis in this tested direction |
 
 Handicap-gauntlet numbers from Rounds 11-16 (roughly +111 to +382 Elo) are **not comparable**
 to this table — different methodology, not true strength. See "Key Methodological Findings."
@@ -1281,6 +1359,11 @@ to this table — different methodology, not true strength. See "Key Methodologi
   (2-seed, small consistent regression vs Round 27, roughly flat vs Round 42), not deployed,
   gitignored, kept for potential future ablation. `tools/training/train_round44_combined.tsv`
   (324,783 positions, the largest dataset in this project's history) kept alongside it.
+* `tools/training/makruk_round45.pt` — Round 45 checkpoint (lambda-annealed WDL blend,
+  lam 0.7→0.3, Round 27's exact dataset, architecture unchanged 512/32/32), val_loss 0.483230
+  (not comparable to Round 27's — validation target itself changed), Elo -244/-230 (2-seed,
+  small consistent regression), not deployed, gitignored, kept for potential future ablation.
+  `src/376020885.bin` (the exported candidate net, superseded) also kept on disk, gitignored.
 * `src/3769833465.bin` — Round 23 VERSION3/MKN3 (int16 L2), archived
 * `src/2020277415.bin` — Round 14 net, MKN2 int16, L1=512 — same underlying weights as
   3769833465.bin before L2 quantization, archived
