@@ -9,9 +9,12 @@ Architecture matches half_ka_v2_makruk.h layout:
   out : Linear(32   →  1),  Sigmoid
 
 Training target (per position):
-  target = lam * sigmoid(score_stm / 400) + (1 - lam) * wdl_stm
-  where score_stm is the engine eval from the side-to-move's perspective
-  and   wdl_stm   is the game result from the side-to-move's perspective.
+  target = lam_t * sigmoid(score_stm / 400) + (1 - lam_t) * wdl_stm
+  where score_stm is the engine eval from the side-to-move's perspective,
+  wdl_stm   is the game result from the side-to-move's perspective, and
+  lam_t     is linearly annealed from --lam-start (epoch 1) to --lam-end
+            (final epoch); --lam-start == --lam-end gives a constant blend.
+  Validation always uses --lam-end, so val_loss stays comparable across epochs.
 
 Requirements:
   pip install torch
@@ -54,9 +57,8 @@ def _cp_to_prob(cp: float) -> float:
 
 
 class MakrukDataset(Dataset):
-    def __init__(self, path: str, lam: float = 0.5, color_augment: bool = False,
+    def __init__(self, path: str, color_augment: bool = False,
                  score_scale: float = 1.0) -> None:
-        self.lam = lam
         self.score_scale = score_scale
         self.data: list[tuple] = []
         with open(path, newline='') as f:
@@ -104,23 +106,28 @@ class MakrukDataset(Dataset):
             score_stm = -score_white
             wdl_stm   = 1.0 - wdl_white
 
-        target = self.lam * _cp_to_prob(score_stm * self.score_scale) + (1.0 - self.lam) * wdl_stm
-        return stm_feats, opp_feats, float(target)
+        return stm_feats, opp_feats, float(score_stm * self.score_scale), float(wdl_stm)
 
 
 def _collate(batch):
     """Build dense multi-hot tensors from variable-length index lists."""
     N = len(batch)
-    stm_t = torch.zeros(N, NNUE_DIMS, dtype=torch.float32)
-    opp_t = torch.zeros(N, NNUE_DIMS, dtype=torch.float32)
-    tgt_t = torch.zeros(N, 1,         dtype=torch.float32)
-    for i, (sf, of, t) in enumerate(batch):
+    stm_t   = torch.zeros(N, NNUE_DIMS, dtype=torch.float32)
+    opp_t   = torch.zeros(N, NNUE_DIMS, dtype=torch.float32)
+    score_t = torch.zeros(N, 1,         dtype=torch.float32)
+    wdl_t   = torch.zeros(N, 1,         dtype=torch.float32)
+    for i, (sf, of, sc, wdl) in enumerate(batch):
         for f in sf:
             stm_t[i, f] = 1.0
         for f in of:
             opp_t[i, f] = 1.0
-        tgt_t[i, 0] = t
-    return stm_t, opp_t, tgt_t
+        score_t[i, 0] = sc
+        wdl_t[i, 0]   = wdl
+    return stm_t, opp_t, score_t, wdl_t
+
+
+def _blend(score_t, wdl_t, lam):
+    return lam * _cp_to_prob(score_t) + (1.0 - lam) * wdl_t
 
 
 # ── Network ───────────────────────────────────────────────────────────────────
@@ -150,7 +157,7 @@ def train(args) -> None:
     print(f'Device   : {device}')
     print(f'Dims     : {NNUE_DIMS}   FT→{L1}  L2→{L2}  L3→{L3}→1')
 
-    dataset = MakrukDataset(args.input, lam=args.lam, color_augment=args.color_augment,
+    dataset = MakrukDataset(args.input, color_augment=args.color_augment,
                             score_scale=args.score_scale)
     n = len(dataset)
     print(f'Samples  : {n}{"  (×2 color-augmented)" if args.color_augment else ""}')
@@ -206,10 +213,13 @@ def train(args) -> None:
         return
 
     for epoch in range(start_epoch, args.epochs + 1):
+        lam_t = args.lam_start + (args.lam_end - args.lam_start) * (epoch - 1) / max(1, args.epochs - 1)
+
         model.train()
         train_loss = 0.0
-        for stm, opp, tgt in train_dl:
-            stm, opp, tgt = stm.to(device), opp.to(device), tgt.to(device)
+        for stm, opp, score, wdl in train_dl:
+            stm, opp, score, wdl = stm.to(device), opp.to(device), score.to(device), wdl.to(device)
+            tgt = _blend(score, wdl, lam_t)
             opt.zero_grad()
             loss = loss_fn(model(stm, opp), tgt)
             loss.backward()
@@ -220,14 +230,15 @@ def train(args) -> None:
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for stm, opp, tgt in val_dl:
-                stm, opp, tgt = stm.to(device), opp.to(device), tgt.to(device)
+            for stm, opp, score, wdl in val_dl:
+                stm, opp, score, wdl = stm.to(device), opp.to(device), score.to(device), wdl.to(device)
+                tgt = _blend(score, wdl, args.lam_end)
                 val_loss += loss_fn(model(stm, opp), tgt).item() * stm.size(0)
         val_loss /= val_n
 
         marker = ' *' if val_loss < best_val else ''
         print(f'Epoch {epoch:3d}/{args.epochs}'
-              f'  train={train_loss:.6f}  val={val_loss:.6f}{marker}')
+              f'  lam={lam_t:.3f}  train={train_loss:.6f}  val={val_loss:.6f}{marker}')
 
         if val_loss < best_val:
             best_val = val_loss
@@ -236,6 +247,7 @@ def train(args) -> None:
                 'model_state': model.state_dict(),
                 'val_loss': val_loss,
                 'arch': {'dims': NNUE_DIMS, 'l1': L1, 'l2': L2, 'l3': L3},
+                'lam_start': args.lam_start, 'lam_end': args.lam_end,
             }, args.output)
 
         # Resume checkpoint: written every epoch (not just improvements) so an
@@ -271,8 +283,12 @@ def main() -> None:
     ap.add_argument('--batch-size', type=int,   default=256)
     ap.add_argument('--lr',         type=float, default=1e-3,
                     help='Adam learning rate')
-    ap.add_argument('--lam',        type=float, default=0.5,
-                    help='Score weight in target: 1.0=score-only, 0.0=result-only')
+    ap.add_argument('--lam-start',  type=float, default=0.7,
+                    help='Score weight in target at epoch 1: 1.0=score-only, 0.0=result-only')
+    ap.add_argument('--lam-end',    type=float, default=0.7,
+                    help='Score weight in target at the final epoch (linearly annealed from '
+                         '--lam-start); also used as the fixed validation-set weight. Equal to '
+                         '--lam-start (the default) reproduces a constant blend.')
     ap.add_argument('--score-boost', type=float, default=1.0,
                     help='Oversample |score|>500cp positions by this factor (e.g. 10.0)')
     ap.add_argument('--color-augment', action='store_true',

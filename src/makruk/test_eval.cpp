@@ -5,6 +5,7 @@
 // Makruk-SF-specific modifications maintained by Homi <bhome1@hotmail.com>.
 
 #include "makruk_eval.h"
+#include "makruk_counting.h"
 #include "../evaluate.h"
 #include "../position.h"
 #include <cassert>
@@ -246,6 +247,126 @@ static void testKRKKingCloseBonus() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 16: Counting-danger awareness — mop-up bonus grows as the counting
+// clock (count/limit) approaches its limit, holding position fixed.
+// ---------------------------------------------------------------------------
+static void testCountingUrgencyAmplifiesMopup() {
+    const std::string name = "testCountingUrgencyAmplifiesMopup";
+    // White K+R vs bare Black king — counting-eligible (no pawns anywhere).
+    Position pos; StateListPtr st;
+    setPos(pos, st, "k7/8/8/8/8/8/8/R3K3 w - - 0 1");
+
+    MakrukCountingState& cs = pos.state()->makrukCounting;
+    assert(cs.active && "KRK vs bare king must be counting-eligible");
+    assert(cs.limit == CountingLimits::Rook && "KRK limit must be Rook (32 plies)");
+
+    cs.count = 0;
+    const Value vLow = makrukClassicalEval(pos);
+
+    cs.count = cs.limit - 1;   // nearly at the counting-draw limit
+    const Value vHigh = makrukClassicalEval(pos);
+
+    assert(vHigh > vLow && "Mop-up bonus must grow as the counting limit approaches");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: Counting-danger awareness is a no-op when counting isn't active
+// (e.g. the stronger side still has a pawn, so eligibility never activates).
+// ---------------------------------------------------------------------------
+static void testCountingUrgencyNoOpWhenInactive() {
+    const std::string name = "testCountingUrgencyNoOpWhenInactive";
+    // White K+R+P vs bare Black king — NOT counting-eligible (a pawn remains).
+    Position pos; StateListPtr st;
+    setPos(pos, st, "k7/8/8/8/8/8/P7/R3K3 w - - 0 1");
+
+    MakrukCountingState& cs = pos.state()->makrukCounting;
+    assert(!cs.active && "A remaining pawn must keep counting inactive");
+
+    const Value vBefore = makrukClassicalEval(pos);
+    cs.count = 1000;   // should be ignored entirely while inactive
+    const Value vAfter = makrukClassicalEval(pos);
+
+    assert(vBefore == vAfter && "Urgency must not apply when counting is inactive");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 18: Eval::evaluate() must consult real classical eval (mop-up/material)
+// throughout a counting-eligible endgame, not just blindly return a flat
+// draw for its entire duration — only the actual terminal draw ply should.
+// (Regression test for a bug where `makrukCounting.active`, true for the
+// WHOLE endgame, was used instead of `isMakrukCountingDraw()`, true only at
+// the limit — making makrukClassicalEval()'s endgame logic dead code during
+// real search.)
+// ---------------------------------------------------------------------------
+static void testEvaluateUsesRealEvalBeforeCountingLimit() {
+    const std::string name = "testEvaluateUsesRealEvalBeforeCountingLimit";
+    Eval::Nnue::init();
+    Position pos; StateListPtr st;
+    setPos(pos, st, "k7/8/8/8/8/8/8/R3K3 w - - 0 1"); // White K+R vs bare Black king
+
+    MakrukCountingState& cs = pos.state()->makrukCounting;
+    assert(cs.active && "KRK vs bare king must be counting-eligible");
+
+    cs.count = 0;
+    const Value vEarly = Eval::evaluate(pos);
+    assert(vEarly > 500 && "Eval::evaluate() must reflect real material/mop-up, not a flat draw");
+
+    cs.count = cs.limit; // exactly at the counting-draw limit
+    const Value vAtLimit = Eval::evaluate(pos);
+    assert(vAtLimit == VALUE_DRAW && "Eval::evaluate() must return a draw exactly at the limit");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 19: Promotion-race urgency — a PASSED pawn one step from promotion
+// scores higher than the same pawn when a pawn on an adjacent file blocks it
+// from being passed (passedPawnSpan), with both black pawns on PST-mirror-
+// equal squares (c-file vs f-file, same rank) so material/PST stay identical
+// between the two positions and only the urgency bonus differs.
+// ---------------------------------------------------------------------------
+static void testPromotionUrgencyRewardsPassedRunner() {
+    const std::string name = "testPromotionUrgencyRewardsPassedRunner";
+    // White pawn d5 (one step from promotion); Black pawn f6 does not block it.
+    Position posPassed; StateListPtr stP;
+    setPos(posPassed, stP, "4k3/8/5p2/3P4/8/8/8/4K3 w - - 0 1");
+
+    // Same, but Black pawn on c6 blocks d5 from being passed (adjacent file,
+    // within passedPawnSpan). c6/f6 are PST-mirror-equal, so material+PST for
+    // the black pawn is identical in both positions.
+    Position posBlocked; StateListPtr stB;
+    setPos(posBlocked, stB, "4k3/8/2p5/3P4/8/8/8/4K3 w - - 0 1");
+
+    const Value vPassed  = makrukClassicalEval(posPassed);
+    const Value vBlocked = makrukClassicalEval(posBlocked);
+    assert(vPassed > vBlocked
+           && "A passed one-step-from-promotion pawn must score higher than a blocked one");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
+// Test 20: Promotion-race urgency gives no bonus on the start rank (too far
+// from promotion to matter yet) even for a fully passed pawn — same
+// passed-vs-blocked setup as above, but with the runner still on its start
+// rank, must evaluate identically.
+// ---------------------------------------------------------------------------
+static void testPromotionUrgencyZeroOnStartRank() {
+    const std::string name = "testPromotionUrgencyZeroOnStartRank";
+    Position posPassed; StateListPtr stP;
+    setPos(posPassed, stP, "4k3/8/8/8/5p2/3P4/8/4K3 w - - 0 1"); // d3 passed, f4 doesn't block
+
+    Position posBlocked; StateListPtr stB;
+    setPos(posBlocked, stB, "4k3/8/8/8/2p5/3P4/8/4K3 w - - 0 1"); // c4 blocks d3
+
+    const Value vPassed  = makrukClassicalEval(posPassed);
+    const Value vBlocked = makrukClassicalEval(posBlocked);
+    assert(vPassed == vBlocked
+           && "No promotion urgency bonus should apply on the pawn's start rank");
+    pass(name);
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -266,6 +387,11 @@ void runMakrukEvalTests() {
     testKBKIsDraw();
     testKNNKIsDraw();
     testKRKKingCloseBonus();
+    testCountingUrgencyAmplifiesMopup();
+    testCountingUrgencyNoOpWhenInactive();
+    testEvaluateUsesRealEvalBeforeCountingLimit();
+    testPromotionUrgencyRewardsPassedRunner();
+    testPromotionUrgencyZeroOnStartRank();
 
     // ---------------------------------------------------------------------------
     // NNUE smoke tests — run after all classical tests.
